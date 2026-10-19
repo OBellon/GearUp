@@ -5,6 +5,7 @@
 #   make probe   — build and run the Phase 0 Click V2 diagnostic
 #   make app     — assemble and sign .build/GearUp.app
 #   make run     — build the app and open it
+#   make smoke   — launch the app and check that it really came up
 #   make clean   — remove build artefacts
 #
 # Extra probe flags go through ARGS, e.g.:
@@ -13,7 +14,7 @@
 
 ARGS ?=
 
-.PHONY: build test probe probe-app app run clean lint
+.PHONY: build test probe probe-app app run smoke clean lint
 
 build:
 	swift build
@@ -32,6 +33,9 @@ app:
 
 run: app
 	open .build/GearUp.app
+
+smoke:
+	./scripts/smoke.sh $(ARGS)
 
 clean:
 	swift package clean

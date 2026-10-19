@@ -86,7 +86,20 @@ public final class GearUpController: ObservableObject {
     @Published public private(set) var shiftCount = 0
 
     /// The most recent settings change is written straight through to disk.
-    @Published public var settings: GearUpSettings {
+    ///
+    /// Deliberately not `@Published`. SwiftUI writes two-way bindings back with
+    /// the value it just read in several places — `MenuBarExtra(isInserted:)`
+    /// does — and `@Published` announces every assignment, changed or not. Each
+    /// announcement re-renders whatever owns the binding, which writes it
+    /// again, which announces again: the update loop runs away until the stack
+    /// overflows and the app dies with a beachball. Announcing only a real
+    /// change is the smallest thing that stops it, and it keeps the settings
+    /// view from being re-rendered for nothing.
+    public var settings: GearUpSettings {
+        willSet {
+            guard newValue != settings else { return }
+            objectWillChange.send()
+        }
         didSet {
             guard settings != oldValue else { return }
             store.save(settings)

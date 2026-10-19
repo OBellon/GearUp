@@ -7,13 +7,6 @@ struct GearUpApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var controller = GearUpController()
 
-    private var menuBarInserted: Binding<Bool> {
-        Binding(
-            get: { controller.settings.showInMenuBar },
-            set: { controller.settings.showInMenuBar = $0 }
-        )
-    }
-
     var body: some Scene {
         Window("GearUp", id: "main") {
             RootView()
@@ -28,7 +21,14 @@ struct GearUpApp: App {
             CommandGroup(replacing: .newItem) {}
         }
 
-        MenuBarExtra(isInserted: menuBarInserted) {
+        // The `isInserted:` binding is what the Settings toggle drives. It is
+        // only safe because `GearUpController.settings` announces a change
+        // when the value really moves: SwiftUI writes a two-way binding back
+        // with the value it just read, and an announcement for a no-op write
+        // re-renders the scene list, which writes the binding again, which
+        // announces again — the app ends up in an update loop that grows the
+        // stack until it dies.
+        MenuBarExtra(isInserted: $controller.settings.showInMenuBar) {
             MenuBarContent()
                 .environmentObject(controller)
         } label: {

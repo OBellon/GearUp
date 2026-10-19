@@ -61,6 +61,17 @@ SwiftUI, CoreBluetooth, Network and OSLog.
 > `@State`. Everything else — `@StateObject`, `@EnvironmentObject`, `@Published`,
 > `@Environment` — is an ordinary property wrapper and works normally.
 
+> **A binding handed to SwiftUI must not announce a write that changed nothing.**
+> SwiftUI writes two-way bindings back with the value it just read; a menu bar
+> extra does it on every scene update. If the setter announces anyway — which is
+> what `@Published` does, changed or not — the announcement re-renders whatever
+> owns the binding, which writes it again, and the update loop grows the stack
+> until the app dies with a beachball. That is why `GearUpController.settings`
+> and `ViewState.value` publish through `objectWillChange.send()` guarded by an
+> equality check instead of `@Published`. `make smoke` launches the app and
+> fails if the bridge does not come up, which is the only automated way to catch
+> that class of loop.
+
 ## Build and test
 
 ```sh
@@ -70,6 +81,7 @@ make build           # same as swift build
 make test            # same as swift run GearUpChecks
 make app             # assemble and ad-hoc sign .build/GearUp.app
 make run             # build the app and open it
+make smoke           # build, open, and check that the bridge came up
 ```
 
 > XCTest and swift-testing both ship with Xcode, which GearUp does not require,

@@ -135,7 +135,7 @@ public final class EventLog: ObservableObject {
         }
 
         fileHandle = try? FileHandle(forWritingTo: fileURL)
-        try? fileHandle?.seekToEnd()
+        _ = try? fileHandle?.seekToEnd()
         write(LogEntry(message: "── GearUp \(Bundle.main.shortVersion) launched ────"))
     }
 

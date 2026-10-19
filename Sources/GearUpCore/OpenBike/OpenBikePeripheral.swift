@@ -19,8 +19,13 @@ public final class OpenBikePeripheral: NSObject, OpenBikeTransport {
 
     public static let localName = "GearUp"
 
-    private static let deviceInformationService = "180A"
-    private static let batteryService = "180F"
+    // The two standard services are spelled out in full rather than as "180A"
+    // and "180F": in the short form CoreBluetooth refuses to publish them ("The
+    // specified UUID is not allowed for this operation"), while the very same
+    // UUID written out in 128 bits is accepted. Without them a BLE client would
+    // only find the OpenBikeControl service.
+    private static let deviceInformationService = "0000180A-0000-1000-8000-00805F9B34FB"
+    private static let batteryService = "0000180F-0000-1000-8000-00805F9B34FB"
     private static let batteryLevelCharacteristic = "2A19"
     private static let manufacturerName = "2A29"
     private static let serialNumber = "2A25"
@@ -248,7 +253,16 @@ extension OpenBikePeripheral: CBPeripheralManagerDelegate {
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         if let error {
-            log("Could not publish \(service.uuid.uuidString): \(error.localizedDescription)", level: .error)
+            // Seen when the standard services are added with their UUID in the
+            // short form (see `deviceInformationService` above). A service that
+            // does not make it into the GATT table is not fatal: the shifts
+            // travel over the OpenBikeControl service, so this is reported and
+            // skipped rather than treated as a broken transport.
+            log(
+                "Could not publish \(service.uuid.uuidString) (\(error.localizedDescription)); "
+                    + "BLE clients will not see that service.",
+                level: .warning
+            )
         }
         addedServices += 1
         if addedServices >= Self.serviceCount {

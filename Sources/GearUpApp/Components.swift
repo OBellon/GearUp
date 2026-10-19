@@ -8,8 +8,18 @@ import GearUpCore
 /// `@State` is a macro whose compiler plugin (`SwiftUIMacros`) only exists in
 /// Xcode, so it cannot be expanded here. A tiny observable object gives the same
 /// behaviour: created once per view, and a binding via `$state.value`.
-final class ViewState<Value>: ObservableObject {
-    @Published var value: Value
+///
+/// `value` is deliberately not `@Published`: SwiftUI writes a two-way binding
+/// back with the value it just read, and `@Published` announces every
+/// assignment, changed or not. Re-rendering for a value that did not move is
+/// how an app ends up in an endless update loop — see `GearUpController.settings`.
+final class ViewState<Value: Equatable>: ObservableObject {
+    var value: Value {
+        willSet {
+            guard newValue != value else { return }
+            objectWillChange.send()
+        }
+    }
 
     init(_ value: Value) {
         self.value = value
