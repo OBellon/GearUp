@@ -79,7 +79,8 @@ swift build          # compile everything
 swift run GearUpChecks   # run the unit checks
 make build           # same as swift build
 make test            # same as swift run GearUpChecks
-make app             # assemble and ad-hoc sign .build/GearUp.app
+make signing         # create GearUp's local signing identity (once per Mac)
+make app             # assemble and sign .build/GearUp.app
 make run             # build the app and open it
 make smoke           # build, open every screen, and check the bridge came up
 ```
@@ -87,6 +88,26 @@ make smoke           # build, open every screen, and check the bridge came up
 > XCTest and swift-testing both ship with Xcode, which GearUp does not require,
 > so the checks live in a small dependency-free runner (`Sources/GearUpChecks`)
 > and exit non-zero when something fails.
+
+### Signing
+
+macOS ties the Bluetooth and local-network permissions to the *signature* of the
+app, which makes an ad-hoc signature a nuisance: its hash changes with every
+build, a different hash is a different app, and the permission is asked for
+again after every rebuild. `make signing` puts that right once per Mac — it
+creates a self-signed certificate (`GearUp Dev`) in the login keychain and trusts
+it for code signing — and from then on both bundles are signed with it, because
+`scripts/sign-identity.sh` picks it up automatically. Nothing else is signed with
+it, and only `codesign` and `security` are allowed to use the private key.
+
+What makes the permission stick is the *designated requirement* rather than the
+hash: two builds of the same bundle sign to
+`identifier "com.oscar.gearup" and certificate root = H"9c2899…"` — the same
+requirement with two different hashes, which is exactly what macOS matches on.
+
+`GEARUP_SIGN_IDENTITY` overrides all of it (a real Apple Development certificate,
+say). With neither, the build falls back to ad-hoc signing: it works, and will ask
+for permissions again after each rebuild.
 
 ## Using the app
 
@@ -113,9 +134,10 @@ Everything is logged twice: to the Diagnostics tab and to
 which is the file to look at (or attach) when something does not work.
 
 1. Launch GearUp and **approve both permission prompts** — Bluetooth, and Local
-   Network when the network transport starts. The app is ad-hoc signed, so a
-   rebuild is a new identity and macOS asks again. Setting
-   `GEARUP_SIGN_IDENTITY` to a stable identity avoids that.
+   Network when the network transport starts. They are asked for once and then
+   kept, because the bundles are signed with GearUp's own identity (see
+   *Signing* above). If the identity is not set up, every rebuild is a new app to
+   macOS and the prompts come back.
 2. Press a button on the **right** puck to wake it. GearUp connects on sight and
    the Ride tab shows the gear changing as you press `+` and `B`.
    The pair of buttons in the window sends the same shifts without the puck, so
@@ -192,9 +214,8 @@ An idle controller reports `0x0FFFFFFF`.
   V2 does not need a daily Zwift unlock, but if it has never been paired it may
   help to connect it once in Zwift and then retry.
 - Check `System Settings → Privacy & Security → Bluetooth` and allow the probe.
-  Ad-hoc signing gives every rebuild a new identity, so macOS may ask again; a
-  stable identity avoids this:
-  `GEARUP_SIGN_IDENTITY="Apple Development: …" make app`.
+  `make signing` does the same for the diagnostic bundle: with a stable identity
+  the permission survives rebuilds instead of being asked for each time.
 - Run with `--all` to confirm the puck is visible at all, then connect by UUID.
 
 ## Setting up MyWhoosh

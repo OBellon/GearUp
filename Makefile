@@ -3,6 +3,7 @@
 #   make build   — compile every target
 #   make test    — run the unit checks
 #   make probe   — build and run the Phase 0 Click V2 diagnostic
+#   make signing — create GearUp's local signing identity (once per Mac)
 #   make app     — assemble and sign .build/GearUp.app
 #   make run     — build the app and open it
 #   make smoke   — launch the app and check that it really came up
@@ -14,13 +15,16 @@
 
 ARGS ?=
 
-.PHONY: build test probe probe-app app run smoke clean lint
+.PHONY: build test probe probe-app signing app run smoke clean lint
 
 build:
 	swift build
 
 test:
 	swift run GearUpChecks
+
+signing:
+	./scripts/setup-signing.sh
 
 probe:
 	./scripts/run-probe.sh $(ARGS)
