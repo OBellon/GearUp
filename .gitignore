@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode (if the project is opened there later)
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Build artefacts produced by scripts/build-app.sh
+build/
+dist/
+*.dmg
+
+# Logs
+*.log
