@@ -169,6 +169,14 @@ var didFinishScan = false
 var keepAliveTimer: DispatchSourceTimer?
 var durationTimer: DispatchSourceTimer?
 
+/// The puck repeats each report several times per press and then keeps
+/// repeating the released state for about a second. Tracking the previous
+/// state lets identical reports be collapsed into a repeat count and lets the
+/// transcript show press/release edges instead of a wall of duplicates.
+var lastButtonMap: UInt32?
+var lastPressedButtons: Set<RideButtonMask>?
+var repeatCount = 0
+
 /// Stops the probe on its own after `--duration` seconds, so a run can be
 /// scripted without leaving a process behind.
 func scheduleAutoStop() {
@@ -245,7 +253,31 @@ central.onEvent = { event in
         scheduleAutoStop()
 
     case .notification(let characteristic, let bytes, let decoded):
+        // Collapse the repeats: only a change of button map is printed, with a
+        // count of how many times the previous one was seen.
+        if case .rideKeyPad(let status)? = decoded, status.buttonMap == lastButtonMap {
+            repeatCount += 1
+            break
+        }
+        if repeatCount > 0 {
+            log.line("   (that report repeated \(repeatCount) more time\(repeatCount == 1 ? "" : "s"))")
+            repeatCount = 0
+        }
+
         log.line("← \(characteristic.prefix(8))  \(bytes.hexString)")
+
+        if case .rideKeyPad(let status)? = decoded {
+            let pressed = Set(status.pressedButtons)
+            for button in pressed.subtracting(lastPressedButtons ?? []) {
+                log.line("   ▶ PRESSED \(button.name)   (mask 0x\(String(format: "%04X", button.rawValue)))")
+            }
+            for button in (lastPressedButtons ?? []).subtracting(pressed) {
+                log.line("   ■ released \(button.name)")
+            }
+            lastPressedButtons = pressed
+            lastButtonMap = status.buttonMap
+        }
+
         if let decoded {
             for line in ZwiftClickCodec.describe(decoded).split(separator: "\n") {
                 log.line("   \(line)")
