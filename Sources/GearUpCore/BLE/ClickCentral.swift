@@ -110,6 +110,9 @@ public final class ClickCentral: NSObject {
     private var central: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var discoveredDevices: [UUID: ClickDevice] = [:]
+    /// macOS re-reports the same advertisement repeatedly; announcing each
+    /// device once keeps the diagnostic log readable.
+    private var announcedPeripherals: Set<UUID> = []
 
     private var target: CBPeripheral?
     public private(set) var connectedDevice: ClickDevice?
@@ -295,6 +298,10 @@ extension ClickCentral: CBCentralManagerDelegate {
 
         peripherals[peripheral.identifier] = peripheral
         discoveredDevices[peripheral.identifier] = device
+
+        // Refresh the RSSI/name in the cache, but only announce a device the
+        // first time it is seen.
+        guard announcedPeripherals.insert(peripheral.identifier).inserted else { return }
         onEvent?(.discovered(device))
     }
 
@@ -382,20 +389,24 @@ extension ClickCentral: CBPeripheralDelegate {
         }
 
         asyncCharacteristic = characteristics.first {
-            $0.uuid.uuidString.caseInsensitiveCompare(ZwiftUUID.asyncCharacteristic) == .orderedSame
+            ZwiftUUID.isCharacteristic($0.uuid.uuidString, ZwiftUUID.asyncCharacteristic)
         }
         syncTxCharacteristic = characteristics.first {
-            $0.uuid.uuidString.caseInsensitiveCompare(ZwiftUUID.syncTxCharacteristic) == .orderedSame
+            ZwiftUUID.isCharacteristic($0.uuid.uuidString, ZwiftUUID.syncTxCharacteristic)
         }
         syncRxCharacteristic = characteristics.first {
-            $0.uuid.uuidString.caseInsensitiveCompare(ZwiftUUID.syncRxCharacteristic) == .orderedSame
+            ZwiftUUID.isCharacteristic($0.uuid.uuidString, ZwiftUUID.syncRxCharacteristic)
         }
 
         guard let asyncCharacteristic,
               let syncTxCharacteristic,
               syncRxCharacteristic != nil else {
+            let found = characteristics.map(\.uuid.uuidString).joined(separator: ", ")
             onEvent?(.error(
-                "Missing one of the expected characteristics (async 0x0002, sync RX 0x0003, sync TX 0x0004)."
+                """
+                Missing one of the expected characteristics (async 0x0002, sync RX 0x0003, sync TX 0x0004).
+                Found on \(service.uuid.uuidString): [\(found)]
+                """
             ))
             return
         }
@@ -416,10 +427,10 @@ extension ClickCentral: CBPeripheralDelegate {
         }
         onEvent?(.subscribed(uuid: characteristic.uuid.uuidString, enabled: characteristic.isNotifying))
 
-        if characteristic.uuid.uuidString.caseInsensitiveCompare(ZwiftUUID.asyncCharacteristic) == .orderedSame {
+        if ZwiftUUID.isCharacteristic(characteristic.uuid.uuidString, ZwiftUUID.asyncCharacteristic) {
             notifyReady = characteristic.isNotifying
         }
-        if characteristic.uuid.uuidString.caseInsensitiveCompare(ZwiftUUID.syncTxCharacteristic) == .orderedSame {
+        if ZwiftUUID.isCharacteristic(characteristic.uuid.uuidString, ZwiftUUID.syncTxCharacteristic) {
             indicateReady = characteristic.isNotifying
         }
 

@@ -83,29 +83,37 @@ public struct ProtoReader {
 
 /// Bit positions used by the Zwift Ride / Click V2 keypad report.
 ///
+/// These were confirmed against a real Click V2 (right puck) by pressing each
+/// button and reading the resulting `buttonMap`. Note that Zwift's published
+/// `RideButtonMask` protobuf enum is **not** the wire mask: its values skip
+/// `0x80`, while the hardware assigns bits in enum order. `Z` really is `0x80`
+/// and `+` (shift up right) really is `0x1000`.
+///
 /// The logic is inverted: a bit set to `1` means the button is **released**,
-/// a bit set to `0` means it is **pressed**. An idle controller reports
+/// a bit set to `0` means it is **pressed**. Bits above 15 are always set.
+/// An idle right Click V2 reports `0xFFFFFFFF`; a Zwift Ride reports
 /// `0x0FFFFFFF`.
 public enum RideButtonMask: UInt32, CaseIterable {
-    case left = 0x00001
-    case up = 0x00002
-    case right = 0x00004
-    case down = 0x00008
-    case a = 0x00010
-    case b = 0x00020
-    case y = 0x00040
-    case z = 0x00080
-    case shiftUpLeft = 0x00100
-    case shiftDownLeft = 0x00200
-    case powerUpLeft = 0x00400
-    case onOffLeft = 0x00800
-    case shiftUpRight = 0x01000
-    case shiftDownRight = 0x02000
-    case powerUpRight = 0x04000
-    case onOffRight = 0x08000
+    case left = 0x0001
+    case up = 0x0002
+    case right = 0x0004
+    case down = 0x0008
+    case a = 0x0010
+    case b = 0x0020
+    case y = 0x0040
+    case z = 0x0080
+    case shiftUpLeft = 0x0100
+    case shiftDownLeft = 0x0200
+    case powerUpLeft = 0x0400
+    case onOffLeft = 0x0800
+    case shiftUpRight = 0x1000
+    case shiftDownRight = 0x2000
+    case powerUpRight = 0x4000
+    case onOffRight = 0x8000
 
+    /// Index of the bit this mask refers to, e.g. `z` → 8.
     public var bit: Int {
-        Int(UInt32(log2(Double(rawValue))))
+        Int(rawValue.trailingZeroBitCount)
     }
 
     public var name: String {
@@ -268,23 +276,32 @@ public struct ClickKeyPadStatus: Equatable {
 }
 
 /// Message type codes seen on the Zwift custom service.
+///
+/// These are the `Opcode` values from Zwift's protocol. GearUp only needs the
+/// ones the controllers actually emit.
 public enum ZwiftMessageType: UInt8 {
     case empty = 0x15
-    case batteryLegacy = 0x19
-    case battery = 0x1A
+    case batteryNotification = 0x19
+    case batteryStatus = 0x1A
     case controllerNotification = 0x23
+    case logData = 0x2A
     case clickNotification = 0x37
-    case deviceInfo = 0x3C
+    case getResponse = 0x3C
+    case statusResponse = 0x3E
+    case rideOn = 0x52
     case disconnect = 0xFE
 
     public var name: String {
         switch self {
         case .empty: return "EMPTY"
-        case .batteryLegacy: return "BATTERY_LEGACY"
-        case .battery: return "BATTERY"
+        case .batteryNotification: return "BATTERY_NOTIF"
+        case .batteryStatus: return "BATTERY_STATUS"
         case .controllerNotification: return "CONTROLLER_NOTIFICATION"
+        case .logData: return "LOG_DATA"
         case .clickNotification: return "CLICK_NOTIFICATION"
-        case .deviceInfo: return "DEVICE_INFO"
+        case .getResponse: return "GET_RESPONSE"
+        case .statusResponse: return "STATUS_RESPONSE"
+        case .rideOn: return "RIDE_ON"
         case .disconnect: return "DISCONNECT"
         }
     }
@@ -293,7 +310,10 @@ public enum ZwiftMessageType: UInt8 {
 public enum ZwiftNotification: Equatable {
     case rideKeyPad(RideKeyPadStatus)
     case clickKeyPad(ClickKeyPadStatus)
-    case battery(level: Int, raw: [UInt8])
+    /// Battery percentage plus the raw charging state, when reported.
+    case battery(level: Int, chargingState: Int?, raw: [UInt8])
+    /// The device echoing `RideOn` back, which acknowledges the handshake.
+    case handshake([UInt8])
     case empty
     case disconnect
     case deviceInfo([UInt8])
@@ -324,22 +344,10 @@ public enum ZwiftClickCodec {
             }
             return .unknown(type: type, payload: payload)
 
-        case .batteryLegacy:
-            // Layout is not documented; the second byte has proven to be the
-            // percentage on the controllers observed so far.
-            let level = payload.count >= 2 ? Int(payload[1]) : (payload.first.map(Int.init) ?? 0)
-            return .battery(level: level, raw: payload)
-
-        case .battery:
-            // BatteryStatus protobuf; field 1 is the percentage.
-            var reader = ProtoReader(payload)
-            while let key = reader.readKey() {
-                if key.field == 1, key.wire == 0, let value = reader.readVarint() {
-                    return .battery(level: Int(value), raw: payload)
-                }
-                guard reader.skip(wire: key.wire) else { break }
-            }
-            return .battery(level: -1, raw: payload)
+        case .batteryNotification, .batteryStatus:
+            // Both messages are protobufs of the same shape: field 1 is a
+            // charging state enum, field 2 is the percentage.
+            return decodeBattery(type: type, payload: payload)
 
         case .empty:
             return .empty
@@ -347,19 +355,48 @@ public enum ZwiftClickCodec {
         case .disconnect:
             return .disconnect
 
-        case .deviceInfo:
+        case .getResponse:
             return .deviceInfo(payload)
+
+        case .logData, .statusResponse, .rideOn:
+            return .unknown(type: type, payload: payload)
 
         case nil:
             return .unknown(type: type, payload: payload)
         }
     }
 
+    private static func decodeBattery(type: UInt8, payload: [UInt8]) -> ZwiftNotification {
+        var reader = ProtoReader(payload)
+        var level: Int?
+        var chargingState: Int?
+        while let key = reader.readKey() {
+            switch (key.field, key.wire) {
+            case (1, 0):
+                chargingState = reader.readVarint().map(Int.init)
+            case (2, 0):
+                level = reader.readVarint().map(Int.init)
+            default:
+                guard reader.skip(wire: key.wire) else {
+                    return .battery(level: -1, chargingState: chargingState, raw: payload)
+                }
+            }
+        }
+        return .battery(level: level ?? -1, chargingState: chargingState, raw: payload)
+    }
+
     /// Decodes a complete characteristic value, where the first byte is the
     /// message type.
+    ///
+    /// The `RideOn` handshake acknowledgement is checked first because its
+    /// first byte is the ASCII `R` (0x52), which would otherwise be read as an
+    /// opcode.
     public static func decode(_ bytes: [UInt8]) -> ZwiftNotification? {
-        guard let type = bytes.first else { return nil }
-        return decode(type: type, payload: Array(bytes.dropFirst()))
+        guard !bytes.isEmpty else { return nil }
+        if bytes.starts(with: rideOn) {
+            return .handshake(bytes)
+        }
+        return decode(type: bytes[0], payload: Array(bytes.dropFirst()))
     }
 
     /// Human-readable summary used by the diagnostic log.
@@ -386,8 +423,12 @@ public enum ZwiftClickCodec {
                 "plus=\(status.plusPressed.map(String.init) ?? "unchanged") minus=\(status.minusPressed.map(String.init) ?? "unchanged")",
             ].joined(separator: "\n")
 
-        case .battery(let level, let raw):
-            return "type=battery level=\(level) raw=\(raw.hexString)"
+        case .battery(let level, let chargingState, let raw):
+            let state = chargingState.map { " chargingState=\($0)" } ?? ""
+            return "type=battery level=\(level)%\(state) raw=\(raw.hexString)"
+
+        case .handshake(let bytes):
+            return "handshake acknowledged by device: \(bytes.hexString)"
 
         case .empty:
             return "type=0x15 EMPTY (keep-alive)"
@@ -396,10 +437,11 @@ public enum ZwiftClickCodec {
             return "type=0xFE DISCONNECT"
 
         case .deviceInfo(let payload):
-            return "type=0x3C DEVICE_INFO payload=\(payload.hexString)"
+            return "type=0x3C GET_RESPONSE payload=\(payload.hexString)"
 
         case .unknown(let type, let payload):
-            return String(format: "type=0x%02X UNKNOWN payload=%@", type, payload.hexString)
+            let name = ZwiftMessageType(rawValue: type).map { " (\($0.name))" } ?? ""
+            return String(format: "type=0x%02X UNKNOWN%@ payload=%@", type, name, payload.hexString)
         }
     }
 }

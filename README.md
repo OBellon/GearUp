@@ -162,6 +162,30 @@ Shift buttons: `0x01` = Shift Up, `0x02` = Shift Down.
 Zwift Click V2 (for the probe): service `FC82`/`00000001-19CA-4651-86E5-FA29DCDD09D1`,
 handshake `RideOn` + `[0x02, 0x03]`, keypad reports as protobuf `RideKeyPadStatus`
 under message type `0x23` (older firmware uses `0x37` with `ClickKeyPadStatus`).
+The device acknowledges the handshake by echoing `RideOn` back on the
+indicate characteristic.
+
+### Confirmed Click V2 button map
+
+Verified against real hardware by pressing each button on the right puck and
+reading the resulting `buttonMap`. A `0` bit means pressed; an idle right puck
+reports `0xFFFFFFFF`.
+
+| Button | Mask | Bit |
+| --- | --- | --- |
+| Y (top) | `0x0040` | 6 |
+| Z (left) | `0x0080` | 7 |
+| A (right) | `0x0010` | 4 |
+| B (bottom) | `0x0020` | 5 |
+| `+` (shift up right) | `0x1000` | 12 |
+
+Zwift's published `RideButtonMask` protobuf enum is **not** the wire mask: it
+skips `0x80`, so a naive reading of it puts `Z` at `0x100`. The hardware assigns
+bits in enum order, which is why `Z` is `0x80` and `+` is `0x1000`.
+
+The puck repeats the same report several times per press and then repeats the
+released state for about a second, so consumers must act on the *transition*
+into "pressed" rather than on every report.
 
 ## License
 

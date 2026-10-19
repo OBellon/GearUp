@@ -208,6 +208,17 @@ central.onEvent = { event in
         }
         log.line(details)
 
+        // The right puck is the target, so there is no reason to keep scanning
+        // and making the rider wait out the whole scan window. Any other
+        // device (including the locked left puck) is only a fallback, so those
+        // wait for the deadline to see whether the right one shows up.
+        if device.isClickV2Right, options.connectID == nil, !didFinishScan {
+            didFinishScan = true
+            central.stopScan()
+            log.line("Right puck found, connecting straight away.")
+            central.connect(to: device.id)
+        }
+
     case .connecting(let device):
         log.line("Connecting to \(device.summary)…")
 

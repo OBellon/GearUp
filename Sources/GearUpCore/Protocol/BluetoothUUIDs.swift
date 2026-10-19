@@ -21,12 +21,34 @@ public enum ZwiftUUID {
 
     public static let customServices = [customServiceLegacy, customServiceModern]
 
+    /// Expands a Bluetooth SIG short UUID to its 128-bit base form.
+    ///
+    /// CoreBluetooth reports SIG-assigned UUIDs in their short form — a service
+    /// created from `0000FC82-0000-1000-8000-00805F9B34FB` comes back as
+    /// `FC82` — so both sides are canonicalised before comparing.
+    public static func canonical(_ uuid: String) -> String {
+        let upper = uuid.uppercased()
+        switch upper.count {
+        case 4: return "0000\(upper)-0000-1000-8000-00805F9B34FB"
+        case 8: return "\(upper)-0000-1000-8000-00805F9B34FB"
+        default: return upper
+        }
+    }
+
+    public static func matches(_ lhs: String, _ rhs: String) -> Bool {
+        canonical(lhs) == canonical(rhs)
+    }
+
     public static func isCustomService(_ uuid: String) -> Bool {
-        customServices.contains { $0.caseInsensitiveCompare(uuid) == .orderedSame }
+        customServices.contains { matches($0, uuid) }
     }
 
     public static func isCustomService(_ uuid: UUID) -> Bool {
         isCustomService(uuid.uuidString)
+    }
+
+    public static func isCharacteristic(_ uuid: String, _ expected: String) -> Bool {
+        matches(uuid, expected)
     }
 }
 
