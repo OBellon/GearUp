@@ -15,6 +15,7 @@ private struct ProbeOptions {
     var connectID: UUID?
     var reportAll = false
     var idleResetThreshold: Double = 0
+    var skipResets = false
     var resetProcedure: Int?
     var skipHandshake = false
     var logFile: URL?
@@ -37,6 +38,8 @@ private struct ProbeOptions {
       --connect <uuid>   Connect to a specific peripheral identifier
       --all              List every Bluetooth device, not only Zwift ones
       --keepalive <n>    Hold the puck awake, resetting it after n seconds of quiet (default: off)
+      --no-reset         Hold the retry but never reset, so the puck sleeps: does the
+                         press that wakes it also arrive as a shift?
       --reset-procedure <n>  Reset with that procedure number instead of the bare reboot
       --no-handshake     Do not send the Click V2 start command
       --log <path>       Write the transcript to this exact file
@@ -69,6 +72,8 @@ private struct ProbeOptions {
                 options.reportAll = true
             case "--no-handshake":
                 options.skipHandshake = true
+            case "--no-reset":
+                options.skipResets = true
             case "--seconds":
                 if let raw = value(after: argument), let seconds = Double(raw) {
                     options.scanSeconds = seconds
@@ -207,9 +212,18 @@ central.reportAllDevices = options.reportAll
 // The probe's `--keepalive` drives the same hold the app uses, so a probe run
 // measures the real mechanism rather than a copy of it: `n` is how long the puck
 // may sit quiet before it gets a reset.
-central.keepsPuckAwake = options.idleResetThreshold > 0
+central.keepsPuckAwake = options.idleResetThreshold > 0 || options.skipResets
 if options.idleResetThreshold > 0 {
     central.idleResetThreshold = options.idleResetThreshold
+}
+if options.skipResets {
+    // `--no-reset` answers a question GearUp has never actually put to the
+    // hardware: whether the press that wakes a sleeping puck also arrives as a
+    // shift. The retry stays on so the wake-up reconnect is caught, and the
+    // threshold goes out of reach so the puck is never rebooted.
+    central.idleResetThreshold = .infinity
+    log.line("(--no-reset: the puck is held but never reset — it will sleep on its own minute.)")
+    log.line("  Wait for it to drop, then press a button and watch whether the press arrives.)")
 }
 // `--no-handshake` used to only say it skipped the start command; the write is
 // what actually has to be held back.

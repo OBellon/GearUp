@@ -171,6 +171,7 @@ Options:
 | `--connect <uuid>` | Connect to a specific peripheral identifier |
 | `--all` | List every Bluetooth device, not only Zwift ones |
 | `--keepalive <n>` | Hold the puck awake, resetting it after n seconds of quiet |
+| `--no-reset` | Hold the retry but never reset, so the puck sleeps on its own minute — the run that asks whether the press which wakes it also arrives as a shift |
 | `--reset-procedure <n>` | Reset with that procedure number instead of the bare reboot |
 | `--no-handshake` | Wait for notifications without sending the start command |
 | `--log <path>` | Write the transcript to this exact file |
@@ -363,6 +364,26 @@ in both. A press opens the puck's window by itself, so a rider who is shifting i
 never reset — the watch only ever reboots a puck that has been quiet for 40
 seconds — and the resets in the log are therefore the price of quiet spells, not
 of a ride.
+
+**The reboot is the only mechanism anyone has found.** The published protocol has
+no data object for sleeping, idling, waking or a timeout (the full list is device
+info, client/server configuration, update info, date and time, BLE security,
+trainer, gear index, tilt, battery, input, Wi-Fi and sensor relay), so there is no
+window to configure and no keep-awake message to send — `RideOn` and the
+Info-Request were both measured to do nothing. BikeControl, the reference for this
+protocol, says the same in its own words: its Click logic *"drives the periodic
+RESET recovery"*, and its keep-awake state machine needs a left puck in range
+before it will call itself `active`. So the reboot is not laziness; three
+independent bridges do it because it is what works.
+
+What has *not* been measured is the assumption underneath it: that the shift which
+wakes a sleeping puck is lost. If the firmware reports the press that woke it —
+which is what a wake path ought to do — then the reset buys nothing and costs a
+reboot every quiet spell, and the hold would be better off simply leaving the puck
+to sleep. `make probe ARGS="--no-reset"` is that question put to the hardware:
+the retry stays on so the wake-up reconnect is caught, and the puck is never
+rebooted. Wait for the drop, press a button, and the transcript says whether that
+press arrived.
 
 ### Confirmed Click V2 button map
 
