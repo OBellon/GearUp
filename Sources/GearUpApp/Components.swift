@@ -192,3 +192,8 @@ struct GearReadout: View {
         }
     }
 }
+
+extension RideButtonMask {
+    /// The wire mask the way it appears in the log, e.g. `0x1000`.
+    var maskHex: String { String(format: "0x%04X", rawValue) }
+}

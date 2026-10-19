@@ -84,6 +84,24 @@ public struct GearUpSettings: Equatable, Codable {
         ButtonMap(shiftUp: shiftUpButton, shiftDown: shiftDownButton)
     }
 
+    /// Points a puck button at an action, through `ButtonMap.assign` so the two
+    /// actions swap rather than collide. Reports what happened.
+    @discardableResult
+    public mutating func assign(_ button: RideButtonMask, to action: ShiftAction) -> ButtonMap.Assignment {
+        var map = buttonMap
+        let result = map.assign(button, to: action)
+        guard result != .unchanged else { return result }
+        shiftUpButton = map.shiftUp
+        shiftDownButton = map.shiftDown
+        return result
+    }
+
+    /// Puts the button map back to the shipped `+` and `B`.
+    public mutating func restoreDefaultButtonMap() {
+        shiftUpButton = ButtonMap.default.shiftUp
+        shiftDownButton = ButtonMap.default.shiftDown
+    }
+
     public static let `default` = GearUpSettings()
 }
 

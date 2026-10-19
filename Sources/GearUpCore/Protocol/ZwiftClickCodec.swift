@@ -136,6 +136,35 @@ public enum RideButtonMask: UInt32, CaseIterable, Codable {
         case .onOffRight: return "onOffRight"
         }
     }
+
+    /// The name a rider sees.
+    ///
+    /// The right puck's buttons are labelled the way they are printed on the
+    /// hardware, which is what the settings screen shows; the rest fall back to
+    /// the protocol name.
+    public var displayName: String {
+        switch self {
+        case .a: return "A"
+        case .b: return "B"
+        case .y: return "Y"
+        case .z: return "Z"
+        case .shiftUpRight: return "+"
+        case .shiftDownRight: return "−"
+        case .powerUpRight: return "power-up"
+        case .onOffRight: return "on/off"
+        case .left, .up, .right, .down,
+             .shiftUpLeft, .shiftDownLeft, .powerUpLeft, .onOffLeft:
+            return name
+        }
+    }
+
+    /// The buttons on the right Click V2 puck, in the order they sit on the
+    /// hardware.
+    ///
+    /// Confirmed against real hardware in Phase 0: the right puck reports these
+    /// five and nothing else, so they are the ones a rider can map. The other
+    /// masks belong to a Zwift Ride or to the left puck, which v1 does not use.
+    public static let clickV2RightPuck: [RideButtonMask] = [.y, .z, .a, .b, .shiftUpRight]
 }
 
 public struct RideAnalogKeyPress: Equatable {

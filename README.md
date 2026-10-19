@@ -16,13 +16,13 @@ MyWhoosh can never get out of sync.
 
 ## Status
 
-Phase 1 — the bridge is wired up end to end.
+Phases 1 and 2 — the bridge works end to end and the settings screen is real.
 
 | Phase | Content | State |
 | --- | --- | --- |
 | 0 | Repo, core codecs, `gearup-probe` diagnostic | ✅ protocol verified on hardware |
-| 1 | App shell, Click V2 connection, OBC transport, shifting, gear readout | 🚧 in progress |
-| 2 | Settings: button mapping and the rest of the options | ⏳ planned |
+| 1 | App shell, Click V2 connection, OBC transport, shifting, gear readout | ✅ verified against MyWhoosh 5.7.0 |
+| 2 | Settings: gear range and the button mapping editor | ✅ |
 | 3 | Both pucks, icon and DMG | ⏳ planned |
 
 Only the **right Click V2 puck** is supported at the start. The architecture keeps
@@ -81,7 +81,7 @@ make build           # same as swift build
 make test            # same as swift run GearUpChecks
 make app             # assemble and ad-hoc sign .build/GearUp.app
 make run             # build the app and open it
-make smoke           # build, open, and check that the bridge came up
+make smoke           # build, open every screen, and check the bridge came up
 ```
 
 > XCTest and swift-testing both ship with Xcode, which GearUp does not require,
@@ -96,6 +96,13 @@ make run        # build, sign and open .build/GearUp.app
 
 The window has three tabs: **Ride** (gear readout, the Click V2 card and the
 MyWhoosh card), **Diagnostics** (the live event log) and **Settings**.
+
+Settings holds the gear range, the button map and the transport switch. For the
+button map you can pick a button from the list or press **Press…** and then the
+button on the puck itself — the app waits for a press and assigns it. Giving an
+action a button that already does the other one swaps the two, so the map is
+never left with both actions on one button. Nothing shifts while the app is
+waiting for that press.
 
 Everything is logged twice: to the Diagnostics tab and to
 

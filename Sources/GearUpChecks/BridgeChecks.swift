@@ -59,6 +59,63 @@ func runShiftRouterChecks(_ checks: Checks) {
         let doubled = ButtonMap(shiftUp: .b, shiftDown: .b)
         checks.equal(doubled.button(for: .shiftDown), nil, "one button cannot do both actions")
         checks.equal(doubled.assignments.count, 1, "a doubled assignment is listed once")
+
+        checks.equal(
+            RideButtonMask.clickV2RightPuck,
+            [.y, .z, .a, .b, .shiftUpRight],
+            "the right puck's five buttons are the mappable ones"
+        )
+        checks.equal(
+            RideButtonMask.clickV2RightPuck.map(\.displayName),
+            ["Y", "Z", "A", "B", "+"],
+            "they are labelled the way the hardware prints them"
+        )
+    }
+
+    checks.group("Button map assignment") {
+        var map = ButtonMap.default
+        checks.equal(map.assign(.y, to: .shiftUp), .assigned, "a free button is assigned")
+        checks.equal(map.shiftUp, .y, "the new button shifts up")
+        checks.equal(map.shiftDown, .b, "the other action is left alone")
+        checks.equal(map.assign(.y, to: .shiftUp), .unchanged, "re-assigning the same button changes nothing")
+
+        // A button that already drives the other action swaps over, so the map
+        // can never be left with both actions on one button.
+        checks.equal(map.assign(.b, to: .shiftUp), .swapped(freed: .y), "a button in use swaps over")
+        checks.equal(map.shiftUp, .b, "the button now shifts up")
+        checks.equal(map.shiftDown, .y, "and the freed button takes the other action")
+        checks.equal(map.action(for: .b), .shiftUp, "the map agrees for the new button")
+        checks.equal(map.action(for: .y), .shiftDown, "the map agrees for the swapped button")
+        checks.equal(map.assign(.z, to: .none), .unchanged, "no action cannot be assigned to")
+
+        var settings = GearUpSettings.default
+        settings.assign(.z, to: .shiftDown)
+        checks.equal(settings.shiftDownButton, .z, "the settings take the new button")
+        checks.equal(settings.buttonMap.action(for: .z), .shiftDown, "the derived map agrees")
+        settings.restoreDefaultButtonMap()
+        checks.equal(settings.buttonMap, .default, "the shipped map can be restored")
+    }
+
+    checks.group("Button capture") {
+        let clock = Clock()
+        let router = ShiftRouter(now: { clock.now })
+        let recorder = Recorder()
+        recorder.attach(to: router)
+
+        router.isCapturingButtons = true
+        router.handle(status(plusPress))
+        clock.advance(0.3)
+        router.handle(status(released))
+
+        checks.equal(recorder.shifts, [], "capturing a button sends no shift")
+        checks.equal(recorder.edges.map(\.0), [.shiftUpRight, .shiftUpRight], "the press and release are still reported")
+        checks.equal(recorder.edges.map(\.1), [true, false], "with the press first")
+
+        router.isCapturingButtons = false
+        clock.advance(0.3)
+        router.handle(status(plusPress))
+
+        checks.equal(recorder.shifts, [.shiftUp], "shifting works again once capture stops")
     }
 
     checks.group("Shift router edges") {

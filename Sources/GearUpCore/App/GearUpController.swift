@@ -85,6 +85,10 @@ public final class GearUpController: ObservableObject {
     @Published public private(set) var lastShiftAction: ShiftAction?
     @Published public private(set) var shiftCount = 0
 
+    /// The action waiting for the rider to press a button on the puck, or `nil`
+    /// when no assignment is in progress.
+    @Published public private(set) var learningAction: ShiftAction?
+
     /// The most recent settings change is written straight through to disk.
     ///
     /// Deliberately not `@Published`. SwiftUI writes two-way bindings back with
@@ -106,7 +110,7 @@ public final class GearUpController: ObservableObject {
             if settings.buttonMap != oldValue.buttonMap {
                 router.buttonMap = settings.buttonMap
                 log.add(
-                    "Button map: \(settings.shiftUpButton.name) shifts up, \(settings.shiftDownButton.name) shifts down."
+                    "Button map: \(settings.shiftUpButton.displayName) shifts up, \(settings.shiftDownButton.displayName) shifts down."
                 )
             }
             if settings.gearCount != oldValue.gearCount {
@@ -182,6 +186,9 @@ public final class GearUpController: ObservableObject {
             } else {
                 pressedButtons.remove(button)
             }
+            if isPressed, let action = learningAction {
+                learn(button, for: action)
+            }
         }
         clickCentral.onEvent = { [weak self] event in
             self?.handleClickEvent(event)
@@ -194,7 +201,7 @@ public final class GearUpController: ObservableObject {
             TransportState(kind: .network, status: networkServer.status),
         ]
 
-        log.add("GearUp ready. Button map: \(settings.shiftUpButton.name) shifts up, \(settings.shiftDownButton.name) shifts down.")
+        log.add("GearUp ready. Button map: \(settings.shiftUpButton.displayName) shifts up, \(settings.shiftDownButton.displayName) shifts down.")
         log.add("Readout: \(gear.gearCount) gears, starting at \(gear.currentGear).")
         log.add("Looking for a Zwift Click V2 (right puck).", level: .info)
     }
@@ -262,6 +269,48 @@ public final class GearUpController: ObservableObject {
     public func resetGear() {
         gear.reset(to: settings.startingGear)
         log.add("Gear readout reset to \(gear.currentGear).")
+    }
+
+    // MARK: - Button map
+
+    /// Waits for the next button pressed on the puck and gives it to an action.
+    ///
+    /// While this is running the router keeps reporting presses — so the screen
+    /// still shows the puck being read — but stops emitting shifts, which is why
+    /// the gear cannot move while a button is being reassigned.
+    public func learnButton(for action: ShiftAction) {
+        guard action != .none else { return }
+        learningAction = action
+        router.isCapturingButtons = true
+        log.add("Press a button on the puck to give it to \(action.title).")
+    }
+
+    /// Gives up on an assignment without changing anything.
+    public func cancelLearning() {
+        guard learningAction != nil else { return }
+        learningAction = nil
+        router.isCapturingButtons = false
+        log.add("Button assignment cancelled.")
+    }
+
+    /// Points a puck button at a shifting action, from the settings screen.
+    public func assign(_ button: RideButtonMask, to action: ShiftAction) {
+        settings.assign(button, to: action)
+    }
+
+    /// Puts the button map back to the shipped `+` and `B`.
+    public func restoreDefaultButtonMap() {
+        settings.restoreDefaultButtonMap()
+    }
+
+    private func learn(_ button: RideButtonMask, for action: ShiftAction) {
+        learningAction = nil
+        router.isCapturingButtons = false
+        // A real change is logged by the settings observer, which prints the
+        // resulting map; only a press that changed nothing needs a word here.
+        if settings.assign(button, to: action) == .unchanged {
+            log.add("\(button.displayName) is already assigned to \(action.title).")
+        }
     }
 
     // MARK: - Transports

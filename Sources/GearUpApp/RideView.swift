@@ -115,11 +115,11 @@ struct RideView: View {
 
             DetailRow(
                 label: "Shift up",
-                value: "\(controller.settings.shiftUpButton.name)  (0x\(mask(controller.settings.shiftUpButton)))"
+                value: "\(controller.settings.shiftUpButton.displayName)  \(controller.settings.shiftUpButton.maskHex)"
             )
             DetailRow(
                 label: "Shift down",
-                value: "\(controller.settings.shiftDownButton.name)  (0x\(mask(controller.settings.shiftDownButton)))"
+                value: "\(controller.settings.shiftDownButton.displayName)  \(controller.settings.shiftDownButton.maskHex)"
             )
             DetailRow(
                 label: "Last press",
@@ -128,10 +128,6 @@ struct RideView: View {
                     : controller.pressedButtons.map(\.name).sorted().joined(separator: ", ")
             )
         }
-    }
-
-    private func mask(_ button: RideButtonMask) -> String {
-        String(format: "%04X", button.rawValue)
     }
 
     // MARK: - MyWhoosh

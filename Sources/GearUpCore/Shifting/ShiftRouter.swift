@@ -41,6 +41,45 @@ public struct ButtonMap: Equatable {
         if shiftDown != shiftUp { result.append((shiftDown, .shiftDown)) }
         return result.map { (button: $0.0, action: $0.1) }
     }
+
+    /// What `assign` did, so the caller can say so in the log.
+    public enum Assignment: Equatable {
+        case assigned
+        case swapped(freed: RideButtonMask)
+        case unchanged
+    }
+
+    /// Points an action at a button.
+    ///
+    /// The two actions never share a button: assigning one that already drives
+    /// the other action swaps them over. That is what a remap screen is expected
+    /// to do, and it leaves the map consistent — the guard in `button(for:)`
+    /// above is only a safety net for a map that was edited by hand.
+    @discardableResult
+    public mutating func assign(_ button: RideButtonMask, to action: ShiftAction) -> Assignment {
+        switch action {
+        case .none:
+            return .unchanged
+        case .shiftUp:
+            guard shiftUp != button else { return .unchanged }
+            if shiftDown == button {
+                shiftDown = shiftUp
+                shiftUp = button
+                return .swapped(freed: shiftDown)
+            }
+            shiftUp = button
+            return .assigned
+        case .shiftDown:
+            guard shiftDown != button else { return .unchanged }
+            if shiftUp == button {
+                shiftUp = shiftDown
+                shiftDown = button
+                return .swapped(freed: shiftUp)
+            }
+            shiftDown = button
+            return .assigned
+        }
+    }
 }
 
 /// Turns keypad reports into shift actions.
@@ -57,6 +96,11 @@ public struct ButtonMap: Equatable {
 /// treated as a fresh press instead.
 public final class ShiftRouter {
     public var buttonMap: ButtonMap
+
+    /// While true, presses are still reported through `onButtonChange` but no
+    /// shift is emitted, so the settings screen can read a button off the puck
+    /// without moving the gear.
+    public var isCapturingButtons = false
 
     /// How long a press is considered held before an identical repeated report
     /// is treated as a new press. The puck's own release flood lasts about a
@@ -118,7 +162,7 @@ public final class ShiftRouter {
         // Sorted so a two-button report always behaves the same way.
         for button in newlyPressed.sorted(by: { $0.rawValue < $1.rawValue }) {
             let action = buttonMap.action(for: button)
-            guard action != .none else { continue }
+            guard action != .none, !isCapturingButtons else { continue }
             actions.append(action)
             onShift?(action, button)
         }
