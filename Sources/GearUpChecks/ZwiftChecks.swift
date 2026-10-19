@@ -237,6 +237,25 @@ func runZwiftChecks(_ checks: Checks) {
             ClickCentral.batteryInterval >= 60 && ClickCentral.batteryInterval <= 900,
             "a held puck is asked about its battery, but only a few times an hour"
         )
+
+        // The hold also has to end. A rider on a long descent or a steady stretch is
+        // not shifting, so there is no shift for a reset to save and a reboot every
+        // forty seconds would be spent on nothing. Past the release threshold GearUp
+        // stops resetting and lets the puck sleep: measured, the retry then catches
+        // the wake-up and the press that wakes it is not reported, which is the price
+        // the rider accepted for the battery.
+        checks.expect(
+            ClickCentral.defaultIdleReleaseThreshold > ClickCentral.defaultIdleResetThreshold,
+            "the hold gives up long after it would have started resetting"
+        )
+        checks.expect(
+            ClickCentral.defaultIdleReleaseThreshold >= 120,
+            "and only after minutes of silence, never a rider's pause between efforts"
+        )
+        checks.expect(
+            ClickCentral.defaultIdleReleaseThreshold <= 600,
+            "so a bike left parked sleeps within minutes rather than being rebooted all afternoon"
+        )
     }
 
     checks.group("Click V2 data objects") {

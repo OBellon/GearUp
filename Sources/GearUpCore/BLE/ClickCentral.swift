@@ -141,6 +141,16 @@ public final class ClickCentral: NSObject {
     /// normal use means a button press, or a handshake. The puck's sleep window
     /// runs from there, so this is the clock the hold watches.
     private var lastActivity = Date.distantPast
+    /// When the rider last actually pressed a button.
+    ///
+    /// Distinct from `lastActivity` on purpose: this one is *not* moved by a reset
+    /// or by the traffic a reconnect brings, which is what lets a long quiet spell
+    /// be told from a busy one. GearUp's own reboots keep the puck awake; they must
+    /// not keep the release clock from ever running out.
+    private var lastPressAt = Date.distantPast
+    /// Whether the hold has stood down for the current quiet spell, so the log says
+    /// so once instead of on every tick.
+    private var isReleased = false
     /// When the reset command was last written. A reset reboots the puck, so the
     /// disconnect that follows one is GearUp's own doing and says so.
     private var lastResetSentAt: Date?
@@ -173,6 +183,11 @@ public final class ClickCentral: NSObject {
         didSet {
             guard keepsPuckAwake != oldValue else { return }
             if keepsPuckAwake {
+                // A hold begins with a rider who has just done something: either
+                // they are shifting, or a client just came up against a puck that
+                // was awake anyway. Both clocks start here.
+                lastPressAt = Date()
+                isReleased = false
                 startHolding()
                 startReconnecting()
             } else {
@@ -191,6 +206,25 @@ public final class ClickCentral: NSObject {
     /// for the clock and the radio, and a rider shifting at all regularly never
     /// reaches it.
     public static let defaultIdleResetThreshold: TimeInterval = 40
+
+    /// How long the puck may sit quiet before GearUp gives up holding its window.
+    ///
+    /// The hold buys one thing: that the shift which wakes a sleeping puck is not
+    /// swallowed. A rider on a long descent or a steady stretch is not shifting at
+    /// all, so there is no shift to lose, and every reset in that spell is a reboot
+    /// spent on nothing. Past this much silence GearUp stops resetting and lets the
+    /// puck power down. The retry stays on, so the press that wakes it is caught and
+    /// the session comes straight back: measured on the unit here, the wake-up
+    /// reconnect landed 30 s after the drop and the press which caused it was never
+    /// reported — that press is the price, and the one after it shifts as usual.
+    public var idleReleaseThreshold: TimeInterval = ClickCentral.defaultIdleReleaseThreshold
+
+    /// Three minutes.
+    ///
+    /// Long enough that a spell the rider would call "a minute of not shifting"
+    /// never reaches it, short enough that a stint on the turbo does not spend a
+    /// reboot every forty seconds on a bike nobody is pedalling.
+    public static let defaultIdleReleaseThreshold: TimeInterval = 180
 
     /// What the hold resets the puck with: the RESET command, a single `0x18`.
     public static let resetCommand: [UInt8] = ZwiftClickCodec.resetCommand
@@ -356,7 +390,30 @@ public final class ClickCentral: NSObject {
         guard keepsPuckAwake, isConnected else { return }
         askForBatteryIfDue()
         guard Date().timeIntervalSince(lastActivity) >= idleResetThreshold else { return }
+
+        // A press is the whole reason for the hold. Past `idleReleaseThreshold` the
+        // rider has stopped shifting — a descent, a steady stretch, the bike parked
+        // — and there is no shift left for a reset to save, so the hold stands down
+        // and the puck is left to power down on its own minute. The retry stays on,
+        // so the press that wakes it puts the session back and the press after that
+        // is a shift like any other.
+        let quiet = Date().timeIntervalSince(lastPressAt)
+        guard quiet < idleReleaseThreshold else {
+            releasePuck(quiet: quiet)
+            return
+        }
+        isReleased = false
         resetPuck()
+    }
+
+    /// Stands the hold down for a quiet spell that has run on too long.
+    private func releasePuck(quiet: TimeInterval) {
+        guard !isReleased else { return }
+        isReleased = true
+        onEvent?(.log(
+            "quiet for \(Int(quiet)) s, so leaving the puck to sleep. "
+            + "The next press wakes it — that one is lost — and the one after it shifts."
+        ))
     }
 
     /// Asks the puck for its battery, no more often than `batteryInterval`.
@@ -731,6 +788,14 @@ extension ClickCentral: CBPeripheralDelegate {
         // echo, an answer to the Info-Request. In a ride that is a button press.
         lastActivity = Date()
         let decoded = ZwiftClickCodec.decode(bytes)
+        // A press is what opens a fresh window on the puck, so it is also the only
+        // thing that counts as the rider being there. The burst of reports that
+        // follows a press, and the state report a reconnect brings with it, are
+        // silence as far as the release clock is concerned.
+        if case .rideKeyPad(let status)? = decoded, !status.pressedButtons.isEmpty {
+            lastPressAt = Date()
+            isReleased = false
+        }
         onEvent?(.notification(characteristic: characteristic.uuid.uuidString, bytes: bytes, decoded: decoded))
     }
 

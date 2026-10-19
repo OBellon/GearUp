@@ -171,6 +171,7 @@ Options:
 | `--connect <uuid>` | Connect to a specific peripheral identifier |
 | `--all` | List every Bluetooth device, not only Zwift ones |
 | `--keepalive <n>` | Hold the puck awake, resetting it after n seconds of quiet |
+| `--release <n>` | Stop holding after n seconds without a press and let the puck sleep (default: 180, the app's own threshold) |
 | `--no-reset` | Hold the retry but never reset, so the puck sleeps on its own minute — the run that asks whether the press which wakes it also arrives as a shift |
 | `--reset-procedure <n>` | Reset with that procedure number instead of the bare reboot |
 | `--no-handshake` | Wait for notifications without sending the start command |
@@ -322,6 +323,19 @@ runs: reset, the link gone 0.12 s later, the puck advertising again, and the
 session up 2.3 s after the drop. The disconnect line names it — *"the reset GearUp
 sent"* — so a drop in the log can be told from the puck's own sleep at a glance.
 
+**And only while there is something to shift for.** A descent, a steady stretch,
+an interval effort: minutes can pass without a gear change, and a rider who is not
+shifting has no shift for a reset to save — that reboot would be spent protecting a
+press that is not coming. So the hold has a second threshold. After **three
+minutes** without a press it stands down, writes nothing further, and lets the puck
+power down on its own minute. The retry stays on, which is what makes that safe:
+the wake-up is caught, the session comes back, and the price is the one measured
+below — the press that wakes the puck is lost, the press after it shifts. Three
+minutes is long enough that no spell a rider would call "a pause between efforts"
+reaches it, and short enough that a parked bike stops being rebooted every forty
+seconds. The log says when it happens: *quiet for 182 s, so leaving the puck to
+sleep.*
+
 Two writes were tried first and measured to do no good on their own. The bare
 `RideOn` header is answered — the puck echoes it — but does nothing about the
 sleep: one every 20 seconds, and the link still died 61 seconds after the last
@@ -407,10 +421,10 @@ button reports at all before the link dropped.
 
 So the shift that has to wake a sleeping controller is the one the sleep costs,
 and the reset buys exactly that back. The price of the hold is one reboot per
-**quiet spell**, not per ride. A hold that instead lets the puck sleep after a
-long silence — the alternative to this — is mechanically sound, since the retry
-above caught a puck that advertised thirty seconds after the drop, but it would
-cost that first shift every time the puck wakes.
+**quiet spell**, not per ride — and once a spell has run three minutes the hold
+stands down altogether, as described above, because by then the rider is plainly not
+shifting and the press the sleep would swallow is one nobody is making. The wake-up
+costs that single press and nothing else.
 
 ### Confirmed Click V2 button map
 
