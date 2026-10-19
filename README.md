@@ -428,8 +428,8 @@ That assumption has since been put to the hardware, and it holds.
 without ever resetting it, and waits. On 19 October the link went at 15:15:49,
 60.8 seconds after the last press, and the pending connect completed the moment
 the puck advertised again — 15:16:19.209, half a minute later, which is itself
-proof that a sleeping puck comes back to a held retry. Then the puck said
-**nothing**: no report when it woke, and the next press (15:16:22.567) arrived
+proof that a sleeping puck comes back to a held retry. Then not a single **button
+report** came back: no report when it woke, and the next press (15:16:22.567) arrived
 exactly as a press does on an awake link, with the pipe plainly working. The
 press that woke it was not reported. The same run's first connection shows the
 same thing from the other side, where the mashing that woke the puck produced no
@@ -439,9 +439,9 @@ A second run the same afternoon closed the loop with the sleep now named in the
 log. Last press 15:48:28.250; *"Disconnected: the puck's own sleep"* at 15:49:29.252
 — 61.0 seconds later, and the puck then advertised nothing for another 15.8 s,
 which is how long it took for a press to wake it. The retry connected at
-15:49:45.054, the subscriptions and handshake completed, and the puck then said
-**nothing for 4.6 seconds** — not a state report, not a press. The next press, at
-15:49:49.642, arrived with its full press-and-release pair. The wake-up press was
+15:49:45.054, the subscriptions and handshake completed, and **not one button
+report** followed until 15:49:49.642 — no state report, no press. The press at
+15:49:49.642 then arrived with its full press-and-release pair. The wake-up press was
 seen to vanish and the one after it to shift, which is the whole trade in one
 transcript.
 
