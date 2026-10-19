@@ -322,6 +322,10 @@ a fresh window at the cost of a reboot. Measured on the unit here, a quiet cycle
 runs: reset, the link gone 0.12 s later, the puck advertising again, and the
 session up 2.3 s after the drop. The disconnect line names it — *"the reset GearUp
 sent"* — so a drop in the log can be told from the puck's own sleep at a glance.
+The sleep has a name of its own too: *"the puck's own sleep: it drops the link about
+a minute after the last press"*. Both used to arrive as *"the connection has timed
+out unexpectedly"*, which read like a fault and was in fact the mechanism working
+exactly as designed — the error is the same, and only the clock tells them apart.
 
 **And only while there is something to shift for.** A descent, a steady stretch,
 an interval effort: minutes can pass without a gear change, and a rider who is not
@@ -334,7 +338,18 @@ below — the press that wakes the puck is lost, the press after it shifts. Thre
 minutes is long enough that no spell a rider would call "a pause between efforts"
 reaches it, and short enough that a parked bike stops being rebooted every forty
 seconds. The log says when it happens: *quiet for 182 s, so leaving the puck to
-sleep.*
+sleep: it powers down about a minute after its last reset or press.*
+
+Standing down is not the same as switching the puck off, and the difference is what
+makes a probe run look as if the sleep had been skipped. The window the *last reset*
+opened keeps running, so a press within the next minute still lands — it was GearUp's
+reboot, not the press, that bought that grace. And any press that does land puts the
+hold straight back on its feet, because a press means the rider is there: the log
+says so, *a press after the quiet: holding the puck's window again*, and the resets
+resume. The one press that is genuinely lost is the one made after the puck has
+actually powered down, which needs a full minute of no presses *and* no resets — the
+state a ten-minute descent reaches and a probe run that presses every few seconds
+never does.
 
 Two writes were tried first and measured to do no good on their own. The bare
 `RideOn` header is answered — the puck echoes it — but does nothing about the

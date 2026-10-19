@@ -256,6 +256,18 @@ func runZwiftChecks(_ checks: Checks) {
             ClickCentral.defaultIdleReleaseThreshold <= 600,
             "so a bike left parked sleeps within minutes rather than being rebooted all afternoon"
         )
+
+        // A sleeping puck and a puck out of range report the same error, so the only
+        // way to tell the mechanism working from a fault is the clock: the sleep
+        // arrives a minute after the last sign of life and an ordinary drop does not.
+        checks.expect(
+            ClickCentral.sleepDropWindow > ClickCentral.resetDropWindow,
+            "a drop is only read as the puck's sleep long after a reset could explain it"
+        )
+        checks.expect(
+            ClickCentral.sleepDropWindow < 60,
+            "and before the sleep itself, so a puck that really went missing is not excused"
+        )
     }
 
     checks.group("Click V2 data objects") {

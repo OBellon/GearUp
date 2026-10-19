@@ -207,6 +207,17 @@ public final class ClickCentral: NSObject {
     /// reaches it.
     public static let defaultIdleResetThreshold: TimeInterval = 40
 
+    /// How long after the last sign of life a drop still reads as the puck's sleep.
+    ///
+    /// A sleeping puck disappears with the same supervision-timeout error as a puck
+    /// that walked out of range, and the two could hardly mean more different
+    /// things: one is normal, the other is a fault. What tells them apart is the
+    /// clock — the puck goes quiet about 61 seconds after the last press or reset
+    /// and not before — so a drop that far into a silence is named as the sleep.
+    /// Measured on the unit here, the sleep lands 61, 61, 61 and 62 seconds after
+    /// the last press; 45 leaves room for the handshake that follows a reconnect.
+    public static let sleepDropWindow: TimeInterval = 45
+
     /// How long the puck may sit quiet before GearUp gives up holding its window.
     ///
     /// The hold buys one thing: that the shift which wakes a sleeping puck is not
@@ -402,7 +413,6 @@ public final class ClickCentral: NSObject {
             releasePuck(quiet: quiet)
             return
         }
-        isReleased = false
         resetPuck()
     }
 
@@ -410,9 +420,12 @@ public final class ClickCentral: NSObject {
     private func releasePuck(quiet: TimeInterval) {
         guard !isReleased else { return }
         isReleased = true
+        // The puck is not asleep yet, and saying "leaving it to sleep" without
+        // saying when is how a run where every press still landed looks like the
+        // sleep was skipped: the window its last reset opened is still running.
         onEvent?(.log(
-            "quiet for \(Int(quiet)) s, so leaving the puck to sleep. "
-            + "The next press wakes it — that one is lost — and the one after it shifts."
+            "quiet for \(Int(quiet)) s, so leaving the puck to sleep: it powers down about a "
+            + "minute after its last reset or press. The press that wakes it is lost, the next shifts."
         ))
     }
 
@@ -635,15 +648,22 @@ extension ClickCentral: CBCentralManagerDelegate {
         error: Error?
     ) {
         // A reset reboots the puck, so say when a drop is one of GearUp's own
-        // rather than leaving a bare "disconnected" in the log with no cause.
+        // rather than leaving a bare "disconnected" in the log with no cause. The
+        // puck's own sleep reads and is named differently: same error, opposite
+        // meaning, and the clock is the only thing that tells them apart.
         let deliberate = lastResetSentAt.map {
             Date().timeIntervalSince($0) < Self.resetDropWindow
         } ?? false
-        onEvent?(.disconnected(
-            deliberate
-                ? "the reset GearUp sent: \(error?.localizedDescription ?? "the puck reboots on it")"
-                : error?.localizedDescription
-        ))
+        let quiet = lastActivity == .distantPast ? 0 : Date().timeIntervalSince(lastActivity)
+        let reason: String?
+        if deliberate {
+            reason = "the reset GearUp sent: \(error?.localizedDescription ?? "the puck reboots on it")"
+        } else if quiet >= Self.sleepDropWindow {
+            reason = "the puck's own sleep: it drops the link about a minute after the last press"
+        } else {
+            reason = error?.localizedDescription
+        }
+        onEvent?(.disconnected(reason))
         target = nil
         connectedDevice = nil
         asyncCharacteristic = nil
@@ -794,7 +814,13 @@ extension ClickCentral: CBPeripheralDelegate {
         // silence as far as the release clock is concerned.
         if case .rideKeyPad(let status)? = decoded, !status.pressedButtons.isEmpty {
             lastPressAt = Date()
-            isReleased = false
+            // A press after a quiet spell that had ended the hold is the rider
+            // coming back, so the hold returns with them — and the log says so, or
+            // a release line followed by resets looks like a contradiction.
+            if isReleased {
+                isReleased = false
+                onEvent?(.log("a press after the quiet: holding the puck's window again."))
+            }
         }
         onEvent?(.notification(characteristic: characteristic.uuid.uuidString, bytes: bytes, decoded: decoded))
     }
