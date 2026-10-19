@@ -266,6 +266,12 @@ central.onEvent = { event in
     case .connected(let device):
         didConnect = true
         log.line("Connected to \(device.summary)")
+        // A new connection is a new stream of reports, and the first report after
+        // a reconnect is the interesting one: it is what the puck says when it
+        // wakes up. Keeping the previous connection's button map collapsed it
+        // against the last report before the sleep, which hid exactly that.
+        lastButtonMap = nil
+        repeatCount = 0
         if options.skipHandshake { scheduleAutoStop() }
 
     case .services(let services):

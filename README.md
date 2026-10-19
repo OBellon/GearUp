@@ -221,6 +221,10 @@ An idle controller reports `0x0FFFFFFF`.
 - Check `System Settings → Privacy & Security → Bluetooth` and allow the probe.
   `make signing` does the same for the diagnostic bundle: with a stable identity
   the permission survives rebuilds instead of being asked for each time.
+- A sleeping puck advertises nothing, so a press made before launching can be
+  spent before the radio is even up. **Keep pressing a button while the window
+  runs**, until the transcript says *"Connected to …"*: the window is counted
+  from the moment Bluetooth comes up, so it is all listening time.
 - Run with `--all` to confirm the puck is visible at all, then connect by UUID.
 
 ## Setting up MyWhoosh
@@ -322,6 +326,13 @@ Two writes were tried first and measured to do no good on their own. The bare
 `RideOn` header is answered — the puck echoes it — but does nothing about the
 sleep: one every 20 seconds, and the link still died 61 seconds after the last
 press. The documented Info-Request `00 08 00` every 5 seconds did not help either.
+
+**The transcript says why.** The puck is quiet, not chatty: it answers a press
+with a short burst of reports — about ten inside the first second — and then sends
+nothing at all until the next press, so a whole minute of the log holds nine
+reports and no more. The window ends 61 seconds after the *press*, not after the
+last byte, so a window that counts presses cannot be stretched by anything the
+host writes. That is what the two attempts above were trying to do.
 It is still worth spending once per connection, because what comes back is a
 `DevInfoPage`: the unit tested names itself `Zwift Click`, hardware `B.0`, firmware
 `1.2.0` — the release Zwift calls current — serial `0A-D4060F930E95` and protocol
@@ -336,7 +347,9 @@ of the moment, and it moves in steps rather than counting down: on the bench her
 read 2863, then 2797 twice, then 2773 twice, across four minutes of continuous
 connection, while the level never left 90% once. Read as a countdown, those numbers
 would mean the puck was flat within two hours of that reading — and it went on
-answering. So the log now quotes anything above an hour in whole hours, where 2773
+answering. Two hours later, after a morning of resets, the same field read **2844**:
+seventy-one minutes *higher* than the last of them, with the level still at 90%.
+A countdown cannot rise. A forecast of the moment's drain can, and does. So the log now quotes anything above an hour in whole hours, where 2773
 is "about 46 h" and does not read like a stopwatch. Zwift's own figure for the same
 puck is **over 100 hours** on a CR2032, so an hour's ride is worth about a percent,
 and the expensive case is a stress test that reconnects it every minute for an
@@ -380,14 +393,24 @@ RESET recovery"*, and its keep-awake state machine needs a left puck in range
 before it will call itself `active`. So the reboot is not laziness; three
 independent bridges do it because it is what works.
 
-What has *not* been measured is the assumption underneath it: that the shift which
-wakes a sleeping puck is lost. If the firmware reports the press that woke it —
-which is what a wake path ought to do — then the reset buys nothing and costs a
-reboot every quiet spell, and the hold would be better off simply leaving the puck
-to sleep. `make probe ARGS="--no-reset"` is that question put to the hardware:
-the retry stays on so the wake-up reconnect is caught, and the puck is never
-rebooted. Wait for the drop, press a button, and the transcript says whether that
-press arrived.
+That assumption has since been put to the hardware, and it holds.
+`make probe ARGS="--no-reset"` finds the puck by mashing its buttons, holds it
+without ever resetting it, and waits. On 19 October the link went at 15:15:49,
+60.8 seconds after the last press, and the pending connect completed the moment
+the puck advertised again — 15:16:19.209, half a minute later, which is itself
+proof that a sleeping puck comes back to a held retry. Then the puck said
+**nothing**: no report when it woke, and the next press (15:16:22.567) arrived
+exactly as a press does on an awake link, with the pipe plainly working. The
+press that woke it was not reported. The same run's first connection shows the
+same thing from the other side, where the mashing that woke the puck produced no
+button reports at all before the link dropped.
+
+So the shift that has to wake a sleeping controller is the one the sleep costs,
+and the reset buys exactly that back. The price of the hold is one reboot per
+**quiet spell**, not per ride. A hold that instead lets the puck sleep after a
+long silence — the alternative to this — is mechanically sound, since the retry
+above caught a puck that advertised thirty seconds after the drop, but it would
+cost that first shift every time the puck wakes.
 
 ### Confirmed Click V2 button map
 
