@@ -141,6 +141,9 @@ public final class ClickCentral: NSObject {
     /// normal use means a button press, or a handshake. The puck's sleep window
     /// runs from there, so this is the clock the hold watches.
     private var lastActivity = Date.distantPast
+    /// When the reset command was last written. A reset reboots the puck, so the
+    /// disconnect that follows one is GearUp's own doing and says so.
+    private var lastResetSentAt: Date?
     private var resetsSent = 0
 
     /// When true, every discovered peripheral is reported, not just Zwift ones.
@@ -197,6 +200,12 @@ public final class ClickCentral: NSObject {
 
     /// How often the hold looks at the clock. The watch writes nothing by itself.
     public static let watchInterval: TimeInterval = 5
+
+    /// How long after a reset a drop still counts as the reset's own doing.
+    ///
+    /// The measured gap is 0.12 s; this leaves room for a slow reboot before the
+    /// distinction is dropped and the disconnect is reported as the puck's.
+    public static let resetDropWindow: TimeInterval = 3
 
     /// Every how many resets the log says so — ten minutes' worth of quiet.
     public static let resetHeartbeat = 15
@@ -331,6 +340,7 @@ public final class ClickCentral: NSObject {
         guard let peripheral = target, let syncRxCharacteristic else { return }
         peripheral.writeValue(Data(resetPayload), for: syncRxCharacteristic, type: .withoutResponse)
         lastActivity = Date()
+        lastResetSentAt = lastActivity
         resetsSent += 1
 
         restartTimer?.invalidate()
@@ -339,12 +349,13 @@ public final class ClickCentral: NSObject {
         }
 
         // One line the first time proves the mechanism is running; after that a
-        // heartbeat, so a quiet hour does not bury the log. Every reset also shows
-        // up as a disconnect and reconnect pair, which is where the timing is.
+        // heartbeat, so a quiet hour does not bury the log. Each reset also shows
+        // as the disconnect it is, named as GearUp's own, which is where the
+        // timing of a cycle can be read.
         if resetsSent == 1 {
-            onEvent?(.log("Click V2: idle for \(Int(idleResetThreshold)) s, so resetting it to open a fresh window."))
+            onEvent?(.log("idle for \(Int(idleResetThreshold)) s, so resetting the puck to open a fresh window."))
         } else if resetsSent % Self.resetHeartbeat == 0 {
-            onEvent?(.log("Click V2: hold heartbeat, \(resetsSent) resets."))
+            onEvent?(.log("hold heartbeat: \(resetsSent) resets so far."))
         }
     }
 
@@ -524,7 +535,16 @@ extension ClickCentral: CBCentralManagerDelegate {
         isReconnecting: Bool,
         error: Error?
     ) {
-        onEvent?(.disconnected(error?.localizedDescription))
+        // A reset reboots the puck, so say when a drop is one of GearUp's own
+        // rather than leaving a bare "disconnected" in the log with no cause.
+        let deliberate = lastResetSentAt.map {
+            Date().timeIntervalSince($0) < Self.resetDropWindow
+        } ?? false
+        onEvent?(.disconnected(
+            deliberate
+                ? "the reset GearUp sent: \(error?.localizedDescription ?? "the puck reboots on it")"
+                : error?.localizedDescription
+        ))
         target = nil
         connectedDevice = nil
         asyncCharacteristic = nil
@@ -532,10 +552,15 @@ extension ClickCentral: CBCentralManagerDelegate {
         syncRxCharacteristic = nil
         didSendHandshake = false
         stopHolding()
+        lastResetSentAt = nil
         // The link is gone whatever happens next; if the puck is meant to be
         // held, retrying by handle is how it comes back without a rescan.
         if keepsPuckAwake {
             startReconnecting()
+            // Ask again at once instead of waiting out the first tick: a rebooted
+            // puck is advertising again a moment later, and that moment is the
+            // whole cost of a reset.
+            retryConnection()
         } else {
             stopReconnecting()
         }

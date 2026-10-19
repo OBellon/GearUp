@@ -272,8 +272,11 @@ That is why GearUp spends it **only when it has to**, never on a clock of its ow
 The window belongs to the puck and a **press** opens a fresh one, so a rider who is
 shifting never needs a reset at all: while the puck is in use GearUp writes
 *nothing*. Only after 40 seconds of quiet — the spell that otherwise ends with the
-puck asleep and needing a press to come back — does the hold reset it, which costs
-about a second of link and starts the window again.
+puck asleep and needing a press to come back — does the hold reset it, which starts
+a fresh window at the cost of a reboot. Measured on the unit here, a quiet cycle
+runs: reset, the link gone 0.12 s later, the puck advertising again, and the
+session up 2.3 s after the drop. The disconnect line names it — *"the reset GearUp
+sent"* — so a drop in the log can be told from the puck's own sleep at a glance.
 
 Two writes were tried first and measured to do no good on their own. The bare
 `RideOn` header is answered — the puck echoes it — but does nothing about the

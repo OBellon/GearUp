@@ -204,6 +204,10 @@ func runZwiftChecks(_ checks: Checks) {
             ClickCentral.reconnectInterval <= 1,
             "a link that goes with the reset is back in about a second"
         )
+        checks.expect(
+            ClickCentral.resetDropWindow > ClickCentral.restartDelay,
+            "the drop a reset causes is recognised as GearUp's own, not as the puck's"
+        )
 
         // The Info-Request is spent once per connection, for the device info it
         // fetches — not as a keep-awake: sent every 5 s for a minute, the puck
