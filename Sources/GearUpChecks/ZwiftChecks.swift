@@ -162,34 +162,53 @@ func runZwiftChecks(_ checks: Checks) {
     }
 
     checks.group("Click V2 keep-awake") {
-        // The keep-alive is the Info-Request, not the `RideOn` header: bare
-        // headers every 20 s were answered three times on real hardware and the
-        // link still died 61 s after the last press, so the write has to be this
-        // one.
+        // The mechanism is a reset, not a ping: the reference implementation's own
+        // Click logic "drives the periodic RESET recovery". A command frame on this
+        // protocol is [opcode, ...payload] with no header, so RESET (opcode 24) is
+        // a single byte on the same characteristic the handshake uses.
         checks.equal(
-            ClickCentral.keepAliveCommand,
-            ZwiftClickCodec.infoRequest,
-            "the keep-alive writes the Info-Request"
+            ZwiftClickCodec.resetCommand,
+            [0x18],
+            "RESET is opcode 24 with no payload"
         )
-        checks.expect(
-            ClickCentral.keepAliveCommand != ZwiftClickCodec.rideOn,
-            "the bare RideOn header is not the keep-alive: the puck echoes it, then sleeps anyway"
+        checks.equal(
+            ClickCentral.resetCommand,
+            ZwiftClickCodec.resetCommand,
+            "the keep-awake resets the puck with that command"
         )
 
-        // Two implementations bracket the cadence: one warns that at 15 s its
-        // Clicks slept, the other writes every 5 s. GearUp's own log agrees that
-        // the puck stops answering well before the link drops at ~60 s.
-        checks.expect(
-            ClickCentral.defaultKeepAliveInterval * 2 <= 15,
-            "two keep-alives fit inside the ~15 s window (\(Int(ClickCentral.defaultKeepAliveInterval)) s apart)"
-        )
+        // The puck sleeps 60 seconds after the last press, and a fresh connection
+        // opens the same window, so a cycle has to land well inside it.
         checks.expect(
             ClickCentral.defaultKeepAliveInterval < 60,
-            "the keep-alive lands long before the puck's ~60 s link drop"
+            "the reset lands long before the puck's ~60 s link drop (\(Int(ClickCentral.defaultKeepAliveInterval)) s)"
+        )
+        checks.expect(
+            ClickCentral.defaultKeepAliveInterval >= 30,
+            "the reset is spaced out: holding the puck costs battery"
+        )
+        checks.expect(
+            ClickCentral.restartDelay > 0
+                && ClickCentral.restartDelay < ClickCentral.defaultKeepAliveInterval,
+            "the puck is started again \(ClickCentral.restartDelay) s after the reset, inside the cycle"
         )
         checks.expect(
             ClickCentral.reconnectInterval < ClickCentral.defaultKeepAliveInterval,
-            "a dropped link is retried sooner than the keep-alive is written"
+            "a dropped link is retried sooner than the next reset"
+        )
+
+        // The Info-Request rides along with the restart. It is the documented
+        // answer to the puck's standby, but it is not what holds the link: GearUp
+        // sent it every 5 s for a minute, the puck answered with its device info,
+        // and the link still died 61 s after the last press.
+        checks.equal(
+            ZwiftClickCodec.infoRequest,
+            [0x00, 0x08, 0x00],
+            "the info request is command 0 with an empty field"
+        )
+        checks.expect(
+            ClickCentral.keepAliveHeartbeat > 1,
+            "the log heartbeats rather than printing every reset"
         )
     }
 

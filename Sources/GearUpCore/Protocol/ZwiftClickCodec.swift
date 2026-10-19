@@ -359,14 +359,23 @@ public enum ZwiftClickCodec {
     /// Plain `"RideOn"`, used by older controllers.
     public static let rideOn: [UInt8] = Array("RideOn".utf8)
 
-    /// Command 0 with an empty field, written to the control point: the
-    /// Info-Request, to which the controller answers in indications.
+    /// The RESET command: opcode 24 with no payload, so a single byte.
     ///
-    /// This is what keeps a Click awake. The `RideOn` header does not: the puck
-    /// echoes it happily and still sleeps, which GearUp measured on real hardware
-    /// (bare headers every 20 s, three answered, link dead 61 s after the last
-    /// press). A public ESP32 reader writes this every 5 s instead and warns that
-    /// at 15 s "the Clicks go to sleep".
+    /// A command frame on this protocol is `[opcode, ...payload]` with no header
+    /// — the reference implementation builds every one of them that way — which
+    /// makes RESET exactly `0x18`, written to the same characteristic as the
+    /// handshake. Its Click logic is the piece that "drives the periodic RESET
+    /// recovery", and that cycle is what stops a right puck dropping its link.
+    public static let resetCommand: [UInt8] = [0x18]
+
+    /// Command 0 with an empty field, written to the control point: the
+    /// Info-Request, to which the controller answers with its device info.
+    ///
+    /// This is the documented answer to *standby*: a public ESP32 reader writes it
+    /// every 5 s and warns that at 15 s "the Clicks go to sleep". It does not hold
+    /// the link by itself — GearUp sent it every 5 s for a whole minute, watched
+    /// the puck answer with its device info, and saw the link die 61 s after the
+    /// last press anyway.
     public static let infoRequest: [UInt8] = [0x00, 0x08, 0x00]
 
     public static func decode(type: UInt8, payload: [UInt8]) -> ZwiftNotification {

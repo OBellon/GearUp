@@ -135,8 +135,9 @@ public final class ClickCentral: NSObject {
     private var lastTargetID: UUID?
 
     private var keepAliveTimer: Timer?
+    private var restartTimer: Timer?
     private var reconnectTimer: Timer?
-    private var keepAlivesSent = 0
+    private var keepAliveCycles = 0
 
     /// When true, every discovered peripheral is reported, not just Zwift ones.
     public var reportAllDevices = false
@@ -145,16 +146,19 @@ public final class ClickCentral: NSObject {
     ///
     /// The puck goes to standby by itself and drops the link **60 seconds after
     /// the last press** — measured on real hardware at 61, 61, 61 and 62 seconds
-    /// across one session — and powers down once nothing is holding it. That is
-    /// how it protects its coin cell, and why the first shift after a quiet spell
-    /// is the one that has to wake it. Only the Info-Request resets that timer,
-    /// and holding the puck costs battery, so `GearUpController` turns this on
-    /// only while there is something to shift for.
+    /// across one session, and 61 seconds after connecting when nothing had been
+    /// pressed at all. That is how it protects its coin cell, and why the first
+    /// shift after a quiet spell is the one that has to wake it. Holding it awake
+    /// costs battery, so `GearUpController` turns this on only while there is
+    /// something to shift for.
     public var keepsPuckAwake = false {
         didSet {
             guard keepsPuckAwake != oldValue else { return }
             if keepsPuckAwake {
-                startKeepAlive()
+                // The policy can switch on long after the link came up — the log
+                // has it 53 seconds in — and a connection's own window is only 60
+                // seconds, so hold the puck the moment it is wanted.
+                startKeepAlive(holdNow: true)
                 startReconnecting()
             } else {
                 stopKeepAlive()
@@ -163,25 +167,31 @@ public final class ClickCentral: NSObject {
         }
     }
 
-    /// How often the Info-Request is re-sent while the puck is held.
+    /// How often the keep-awake cycle runs while the puck is held.
     public var keepAliveInterval: TimeInterval = ClickCentral.defaultKeepAliveInterval
 
-    /// What the keep-alive writes: the Info-Request.
+    /// How often the keep-awake cycle runs.
     ///
-    /// Not the `RideOn` header, which the puck cheerfully echoes back and which
-    /// still does nothing about the sleep — measured here, bare headers every
-    /// 20 seconds were answered three times and the link died anyway, 61 seconds
-    /// after the last press.
-    public static let keepAliveCommand: [UInt8] = ZwiftClickCodec.infoRequest
+    /// The puck sleeps 60 seconds after the last press, so the cycle has to land
+    /// comfortably inside that; 40 seconds leaves twenty of margin. It is also
+    /// cheap: two writes a minute, where a 5-second ping cost twelve.
+    public static let defaultKeepAliveInterval: TimeInterval = 40
 
-    /// Well inside the ~15 s window another implementation measured (at 15 s,
-    /// their Clicks slept), so a missed request is not the end of the link.
-    public static let defaultKeepAliveInterval: TimeInterval = 5
+    /// What the cycle resets the puck with: the RESET command, a single `0x18`.
+    public static let resetCommand: [UInt8] = ZwiftClickCodec.resetCommand
+
+    /// How long the puck is given between being reset and being started again.
+    ///
+    /// The reference's command sender pauses half a second after every write, and
+    /// a reset makes the puck stop, so the start command waits rather than racing
+    /// it. Well inside the cycle either way.
+    public static let restartDelay: TimeInterval = 0.5
 
     /// How often a dropped link is retried while the puck is held. The puck's
     /// radio is off until a button press wakes it, so early attempts simply fail
-    /// until it is back, and the interval stays cheap.
-    public static let reconnectInterval: TimeInterval = 4
+    /// until it is back; only a disconnected peripheral is retried, so attempts
+    /// cannot stack up behind one another.
+    public static let reconnectInterval: TimeInterval = 2
 
     public var isConnected: Bool { target?.state == .connected }
 
@@ -246,46 +256,79 @@ public final class ClickCentral: NSObject {
         peripheral.writeValue(Data(command), for: syncRxCharacteristic, type: .withoutResponse)
         didSendHandshake = true
         onEvent?(.handshakeSent(command))
-        // A link that just came up is a link worth keeping up.
-        startKeepAlive()
+        // A link that just came up is a link worth keeping up — and the handshake
+        // is itself a fresh session, so the first cycle can wait a full interval.
+        startKeepAlive(holdNow: false)
         stopReconnecting()
     }
 
-    /// Re-sends the Info-Request, the write that keeps the puck from dropping the
-    /// link and going to standby.
-    public func sendKeepAlive() {
-        guard let peripheral = target, let syncRxCharacteristic else { return }
-        peripheral.writeValue(Data(Self.keepAliveCommand), for: syncRxCharacteristic, type: .withoutResponse)
-        keepAlivesSent += 1
-        // One line when it starts proves the mechanism is running; after that a
-        // heartbeat, so a long ride does not bury the log in requests. The puck's
-        // own answers show up as notifications, and identical ones collapse into
-        // a repeat count, which is where the evidence of "still answering" lives.
-        if keepAlivesSent == 1 {
-            onEvent?(.log("Keeping the puck awake: info request every \(Int(keepAliveInterval)) s."))
-        } else if keepAlivesSent % Self.keepAliveHeartbeat == 0 {
-            onEvent?(.log("Keep-awake heartbeat: \(keepAlivesSent) info requests."))
-        }
-    }
-
-    /// Every how many keep-alives the log says so — five minutes' worth at the
-    /// default cadence.
-    public static let keepAliveHeartbeat = 60
+    /// Every how many cycles the log says so — ten minutes' worth at the default
+    /// cadence.
+    public static let keepAliveHeartbeat = 15
 
     // MARK: - Holding the puck
 
-    private func startKeepAlive() {
+    /// Runs one keep-awake cycle: reset the puck, then start it again.
+    ///
+    /// A reset is what the reference implementation sends periodically, and the
+    /// log shows the same effect from a fresh connection: every link that came up
+    /// gave the puck a new 60-second window. Resetting over the existing link buys
+    /// that window without dropping the connection.
+    private func holdPuckAwake() {
+        guard let peripheral = target, let syncRxCharacteristic else { return }
+        peripheral.writeValue(Data(Self.resetCommand), for: syncRxCharacteristic, type: .withoutResponse)
+        keepAliveCycles += 1
+
+        restartTimer?.invalidate()
+        restartTimer = Timer.scheduledTimer(withTimeInterval: Self.restartDelay, repeats: false) { [weak self] _ in
+            self?.restartPuck()
+        }
+
+        // One line when it starts proves the mechanism is running; after that a
+        // heartbeat, so a long ride does not bury the log. The puck's answers on
+        // the indicating characteristic are the evidence it is working rather than
+        // merely wired: the reset brings back a `ff 05 …`, the restart the `RideOn`
+        // echo.
+        if keepAliveCycles == 1 {
+            onEvent?(.log("Keep-awake: reset + start every \(Int(keepAliveInterval)) s."))
+        } else if keepAliveCycles % Self.keepAliveHeartbeat == 0 {
+            onEvent?(.log("Keep-awake heartbeat: \(keepAliveCycles) resets."))
+        }
+    }
+
+    /// Starts the puck again after a reset, which is the same write the handshake
+    /// uses because a reset makes the puck stop.
+    ///
+    /// The Info-Request rides along: it is the documented answer to the puck's
+    /// *standby*, even though on its own it does not hold the link.
+    private func restartPuck() {
+        restartTimer = nil
+        guard let peripheral = target, let syncRxCharacteristic else { return }
+        let command = ZwiftClickCodec.clickV2StartCommand
+        peripheral.writeValue(Data(command), for: syncRxCharacteristic, type: .withoutResponse)
+        peripheral.writeValue(Data(ZwiftClickCodec.infoRequest), for: syncRxCharacteristic, type: .withoutResponse)
+    }
+
+    /// Starts, or re-phases, the keep-awake timer.
+    ///
+    /// `holdNow` is for a policy that has just switched on, which may be well into
+    /// an existing connection's window; a caller that has itself started a fresh
+    /// session — the handshake — wants a full interval first instead.
+    private func startKeepAlive(holdNow: Bool) {
         stopKeepAlive()
         guard keepsPuckAwake, isConnected else { return }
-        keepAlivesSent = 0
+        keepAliveCycles = 0
+        if holdNow { holdPuckAwake() }
         keepAliveTimer = Timer.scheduledTimer(withTimeInterval: keepAliveInterval, repeats: true) { [weak self] _ in
-            self?.sendKeepAlive()
+            self?.holdPuckAwake()
         }
     }
 
     private func stopKeepAlive() {
         keepAliveTimer?.invalidate()
         keepAliveTimer = nil
+        restartTimer?.invalidate()
+        restartTimer = nil
     }
 
     /// Retries the last puck by handle, which is the only way back to a device
@@ -315,10 +358,14 @@ public final class ClickCentral: NSObject {
             stopReconnecting()
             return
         }
-        guard peripheral.state != .connected else {
+        if peripheral.state == .connected {
             stopReconnecting()
             return
         }
+        // Only a genuinely disconnected peripheral is retried: a connect the
+        // system is already waiting on stays pending until the puck advertises, so
+        // asking again every tick would only stack up.
+        guard peripheral.state == .disconnected else { return }
         target = peripheral
         central.connect(peripheral, options: nil)
     }

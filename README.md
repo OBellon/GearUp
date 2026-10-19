@@ -148,7 +148,7 @@ Options:
 | `--duration <n>` | Stop n seconds after the handshake (default: run until Ctrl-C) |
 | `--connect <uuid>` | Connect to a specific peripheral identifier |
 | `--all` | List every Bluetooth device, not only Zwift ones |
-| `--keepalive <n>` | Hold the puck awake, sending the Info-Request every n seconds |
+| `--keepalive <n>` | Hold the puck awake, resetting and restarting it every n seconds |
 | `--no-handshake` | Wait for notifications without sending the start command |
 | `--log <path>` | Write the transcript to this exact file |
 | `--log-dir <path>` | Directory for `probe-<timestamp>.log` (default `~/Library/Logs/GearUp`) |
@@ -257,14 +257,25 @@ bridge, documents the same wall and its workaround is to pair the pucks in the
 official Zwift app for about three minutes before handing them over, which is
 the "opening Zwift first" that riders notice.
 
-**What resets the timer is the Info-Request, not the handshake.** Writing the
-bare `RideOn` header is answered — the puck echoes it — but does nothing about
-the sleep: GearUp sent one every 20 seconds and the link still died 61 seconds
-after the last press. The write that works is the documented Info-Request
-`00 08 00` (command 0 with an empty field) to the control point, which a public
-ESP32 reader sends **every 5 seconds** while warning that at 15 seconds *"the
-Clicks go to sleep"*. GearUp does the same, and the puck answers on the
-indicating characteristic so the log shows it is still there.
+**What holds the link is a periodic RESET, not a keep-alive ping.** BikeControl's
+own stub for its Click logic says it *"drives the periodic RESET recovery"*, and
+a command frame on this protocol is just `[opcode, ...payload]` — no header — so
+RESET is opcode 24 and the whole command is one byte, `0x18`, written to the same
+characteristic as the handshake. The puck answers a reset by stopping, so GearUp
+follows it half a second later with the same start command it uses to connect, and
+the cycle runs **every 40 seconds**: inside the 60-second window, and two writes a
+minute where a keep-alive ping cost twelve.
+
+Two writes were tried first and measured to do no good on their own. The bare
+`RideOn` header is answered — the puck echoes it — but does nothing about the
+sleep: one every 20 seconds, and the link still died 61 seconds after the last
+press. The documented Info-Request `00 08 00` (command 0 with an empty field) every
+5 seconds did not help either, though it does prove something useful: the puck
+answers it with its device info, which is how GearUp sees the serial number and a
+version string (`B.0` on the unit tested). What a fresh connection *did* do, every
+time, was give the puck a new 60-second window — which is the effect the reset
+cycle is built to buy without dropping the link. The Info-Request now rides along
+with each restart, since it is the documented answer to the puck's standby.
 
 GearUp holds the puck while, and only while, there is something to shift for: a
 client is connected, or the settings screen is waiting for a button. Holding it

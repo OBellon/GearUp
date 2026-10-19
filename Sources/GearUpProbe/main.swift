@@ -35,7 +35,7 @@ private struct ProbeOptions {
       --duration <n>     Stop n seconds after the handshake (default: run until Ctrl-C)
       --connect <uuid>   Connect to a specific peripheral identifier
       --all              List every Bluetooth device, not only Zwift ones
-      --keepalive <n>    Hold the puck awake with an info request every n seconds (default: off)
+      --keepalive <n>    Hold the puck awake, resetting and restarting it every n seconds (default: off)
       --no-handshake     Do not send the Click V2 start command
       --log <path>       Write the transcript to this exact file
       --log-dir <path>   Directory for probe-<timestamp>.log (default: ~/Library/Logs/GearUp)
