@@ -282,6 +282,9 @@ public final class GearUpController: ObservableObject {
         guard action != .none else { return }
         learningAction = action
         router.isCapturingButtons = true
+        // Holding the puck now matters: a capture that waits on a puck which
+        // falls asleep after a minute is a capture that never completes.
+        updatePuckPolicy()
         log.add("Press a button on the puck to give it to \(action.title).")
     }
 
@@ -290,6 +293,7 @@ public final class GearUpController: ObservableObject {
         guard learningAction != nil else { return }
         learningAction = nil
         router.isCapturingButtons = false
+        updatePuckPolicy()
         log.add("Button assignment cancelled.")
     }
 
@@ -311,6 +315,7 @@ public final class GearUpController: ObservableObject {
         if settings.assign(button, to: action) == .unchanged {
             log.add("\(button.displayName) is already assigned to \(action.title).")
         }
+        updatePuckPolicy()
     }
 
     // MARK: - Transports
@@ -332,9 +337,33 @@ public final class GearUpController: ObservableObject {
         transports = allTransports.map { transport in
             TransportState(kind: transport.kind, status: transport.status, appInfo: transport.appInfo)
         }
+        updatePuckPolicy()
     }
 
     // MARK: - Click V2
+
+    /// Whether the puck earns its battery right now.
+    ///
+    /// Holding it awake is what stops it dropping the link 60 seconds after the
+    /// last press, and it costs battery by design: that sleep *is* the puck's own
+    /// power saving. It only buys anything while there is somewhere for a shift
+    /// to go, so GearUp holds the puck exactly then — a client is connected, or a
+    /// rider is waiting to assign a button — and leaves it alone the rest of the
+    /// time, to power down on its own minute.
+    private var isPuckWanted: Bool {
+        isAppConnected || learningAction != nil
+    }
+
+    private func updatePuckPolicy() {
+        let wanted = isPuckWanted
+        guard wanted != clickCentral.keepsPuckAwake else { return }
+        clickCentral.keepsPuckAwake = wanted
+        if wanted {
+            log.add("Holding the puck awake: there is something to shift for.")
+        } else {
+            log.add("Letting the puck sleep: nothing is connected to shift for.")
+        }
+    }
 
     private func handleClickEvent(_ event: ClickCentralEvent) {
         switch event {
@@ -398,11 +427,18 @@ public final class GearUpController: ObservableObject {
             click.phase = isRunning ? .searching : .off
             click.rssi = nil
             click.battery = nil
-            click.note = "Press a button on the puck to reconnect."
             lastNotificationBytes = nil
             repeatCount = 0
             let suffix = reason.map { " (\($0))" } ?? ""
-            log.add("Click V2 disconnected\(suffix). Looking for it again.", level: .warning)
+            if clickCentral.keepsPuckAwake {
+                // The central is already retrying by handle, so say that instead
+                // of telling the rider to press a button for nothing.
+                click.note = "Reconnecting…"
+                log.add("Click V2 disconnected\(suffix). Reconnecting.", level: .warning)
+            } else {
+                click.note = "Press a button on the puck to wake it up."
+                log.add("Click V2 disconnected\(suffix). Leaving it to sleep.", level: .warning)
+            }
         }
     }
 

@@ -148,7 +148,7 @@ Options:
 | `--duration <n>` | Stop n seconds after the handshake (default: run until Ctrl-C) |
 | `--connect <uuid>` | Connect to a specific peripheral identifier |
 | `--all` | List every Bluetooth device, not only Zwift ones |
-| `--keepalive <n>` | Re-send `RideOn` every n seconds |
+| `--keepalive <n>` | Hold the puck awake, re-sending `RideOn` every n seconds |
 | `--no-handshake` | Wait for notifications without sending the start command |
 | `--log <path>` | Write the transcript to this exact file |
 | `--log-dir <path>` | Directory for `probe-<timestamp>.log` (default `~/Library/Logs/GearUp`) |
@@ -240,6 +240,28 @@ handshake `RideOn` + `[0x02, 0x03]`, keypad reports as protobuf `RideKeyPadStatu
 under message type `0x23` (older firmware uses `0x37` with `ClickKeyPadStatus`).
 The device acknowledges the handshake by echoing `RideOn` back on the
 indicate characteristic.
+
+### The puck sleeps after a minute
+
+A Click V2 drops the BLE link **60 seconds after the last press** and then
+powers down; that is its own way of protecting a coin cell. On real hardware the
+drop landed 61, 61, 61 and 62 seconds after the last button, and 61 seconds
+after connecting when nothing had been pressed at all.
+
+It explains two things that look like faults. The puck's LED sits there blinking
+blue, which is the state a sleeping puck wakes up in — Zwift's own documentation
+reads *flashing blue* as "ready to pair", *solid blue* as connected, and the LED
+off while riding to save battery. And a rider who has not shifted for a minute
+finds that the next press is the one that has to wake the controller.
+
+GearUp holds the puck while, and only while, there is something to shift for: a
+client is connected, or the settings screen is waiting for a button. Holding it
+costs battery, and holding it for nothing spends a coin cell on a controller
+nobody is using, so the rest of the time the puck is left alone to power down on
+its own minute. While it is held, GearUp re-sends the bare `RideOn` header every
+20 seconds — never the start command, which the firmware may read as a restart —
+and retries a dropped link by handle, because CoreBluetooth introduces a
+peripheral once and a rescan cannot turn up a puck it has already seen.
 
 ### Confirmed Click V2 button map
 

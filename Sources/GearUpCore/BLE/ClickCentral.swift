@@ -127,8 +127,61 @@ public final class ClickCentral: NSObject {
     private var indicateReady = false
     private var didSendHandshake = false
 
+    /// The puck the central was last pointed at.
+    ///
+    /// Kept across a drop because CoreBluetooth hands a peripheral to
+    /// `didDiscover` once and then keeps quiet about it: a puck that dropped can
+    /// only be picked up again by connecting to the handle we already have.
+    private var lastTargetID: UUID?
+
+    private var keepAliveTimer: Timer?
+    private var reconnectTimer: Timer?
+    private var keepAlivesSent = 0
+
     /// When true, every discovered peripheral is reported, not just Zwift ones.
     public var reportAllDevices = false
+
+    /// While true the puck is held: its link is kept alive and a drop is retried.
+    ///
+    /// The puck sleeps **60 seconds after the last press** — measured on real
+    /// hardware at 61, 61, 61 and 62 seconds across one session — and powers down
+    /// once nothing is holding it. That is how it protects its coin cell, and why
+    /// the first shift after a quiet spell is the one that has to wake it.
+    /// Holding it costs battery, so `GearUpController` turns this on only while
+    /// there is something to shift for.
+    public var keepsPuckAwake = false {
+        didSet {
+            guard keepsPuckAwake != oldValue else { return }
+            if keepsPuckAwake {
+                startKeepAlive()
+                startReconnecting()
+            } else {
+                stopKeepAlive()
+                stopReconnecting()
+            }
+        }
+    }
+
+    /// How often the `RideOn` header is re-sent while the puck is held.
+    public var keepAliveInterval: TimeInterval = ClickCentral.defaultKeepAliveInterval
+
+    /// What the keep-alive actually writes: the bare `RideOn` header rather than
+    /// the start command the handshake uses.
+    ///
+    /// The puck accepts a bare header (`constants.dart` in the reference: "the
+    /// header has to be RIDEON + 2"), and re-sending something that reads as
+    /// *start* every twenty seconds is a bet that the firmware will not restart
+    /// on it — a bet with a rider on the bike.
+    public static let keepAliveCommand: [UInt8] = ZwiftClickCodec.rideOn
+
+    /// A third of the puck's own sleep window, so three writes land before it
+    /// would nod off even if one is missed.
+    public static let defaultKeepAliveInterval: TimeInterval = 20
+
+    /// How often a dropped link is retried while the puck is held. The puck's
+    /// radio is off until a button press wakes it, so early attempts simply fail
+    /// until it is back, and the interval stays cheap.
+    public static let reconnectInterval: TimeInterval = 4
 
     public var isConnected: Bool { target?.state == .connected }
 
@@ -171,6 +224,7 @@ public final class ClickCentral: NSObject {
         )
         onEvent?(.connecting(device))
         target = peripheral
+        lastTargetID = id
         didSendHandshake = false
         notifyReady = false
         indicateReady = false
@@ -192,15 +246,84 @@ public final class ClickCentral: NSObject {
         peripheral.writeValue(Data(command), for: syncRxCharacteristic, type: .withoutResponse)
         didSendHandshake = true
         onEvent?(.handshakeSent(command))
+        // A link that just came up is a link worth keeping up.
+        startKeepAlive()
+        stopReconnecting()
     }
 
-    /// Re-sends the handshake. Useful as a keep-alive while testing whether the
-    /// controller goes quiet after a minute.
+    /// Re-sends the `RideOn` header, which is what keeps the puck from dropping
+    /// the link 60 seconds after the last press.
+    ///
+    /// A bare header rather than the full start command: the puck accepts the
+    /// header on its own (see `constants.dart` in the reference, "the header has
+    /// to be RIDEON + 2"), and repeating something that reads as *start* every
+    /// twenty seconds is a way to find out the hard way whether the firmware
+    /// restarts on it.
     public func sendKeepAlive() {
         guard let peripheral = target, let syncRxCharacteristic else { return }
-        let command = ZwiftClickCodec.rideOn
-        peripheral.writeValue(Data(command), for: syncRxCharacteristic, type: .withoutResponse)
-        onEvent?(.log("keep-alive sent: \(command.hexString)"))
+        peripheral.writeValue(Data(Self.keepAliveCommand), for: syncRxCharacteristic, type: .withoutResponse)
+        keepAlivesSent += 1
+        // One line when it starts proves the mechanism is running; after that a
+        // heartbeat, so a long ride does not bury the log in pings.
+        if keepAlivesSent == 1 {
+            onEvent?(.log("Keeping the puck awake: RideOn every \(Int(keepAliveInterval)) s."))
+        } else if keepAlivesSent % Self.keepAliveHeartbeat == 0 {
+            onEvent?(.log("Keep-awake heartbeat: \(keepAlivesSent) RideOn writes."))
+        }
+    }
+
+    /// Every how many keep-alives the log says so.
+    public static let keepAliveHeartbeat = 15
+
+    // MARK: - Holding the puck
+
+    private func startKeepAlive() {
+        stopKeepAlive()
+        guard keepsPuckAwake, isConnected else { return }
+        keepAlivesSent = 0
+        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: keepAliveInterval, repeats: true) { [weak self] _ in
+            self?.sendKeepAlive()
+        }
+    }
+
+    private func stopKeepAlive() {
+        keepAliveTimer?.invalidate()
+        keepAliveTimer = nil
+    }
+
+    /// Retries the last puck by handle, which is the only way back to a device
+    /// CoreBluetooth has already introduced: it reports each peripheral to
+    /// `didDiscover` once, so scanning alone never finds a dropped puck again.
+    ///
+    /// A sleeping puck wakes on a button press and answers straight away, so this
+    /// is also how the app recovers when a rider picks the controller up.
+    private func startReconnecting() {
+        guard reconnectTimer == nil, let id = lastTargetID, let peripheral = peripherals[id] else { return }
+        guard peripheral.state != .connected else { return }
+        reconnectTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.reconnectInterval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.retryConnection()
+        }
+    }
+
+    private func stopReconnecting() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+    }
+
+    private func retryConnection() {
+        guard keepsPuckAwake, let id = lastTargetID, let peripheral = peripherals[id] else {
+            stopReconnecting()
+            return
+        }
+        guard peripheral.state != .connected else {
+            stopReconnecting()
+            return
+        }
+        target = peripheral
+        central.connect(peripheral, options: nil)
     }
 
     // MARK: - Private
@@ -341,6 +464,14 @@ extension ClickCentral: CBCentralManagerDelegate {
         syncTxCharacteristic = nil
         syncRxCharacteristic = nil
         didSendHandshake = false
+        stopKeepAlive()
+        // The link is gone whatever happens next; if the puck is meant to be
+        // held, retrying by handle is how it comes back without a rescan.
+        if keepsPuckAwake {
+            startReconnecting()
+        } else {
+            stopReconnecting()
+        }
         if wantsScan { beginScan() }
     }
 }

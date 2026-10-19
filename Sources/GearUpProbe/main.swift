@@ -166,7 +166,6 @@ if Bundle.main.bundleURL.pathExtension != "app" {
 var candidates: [UUID: ClickDevice] = [:]
 var didConnect = false
 var didFinishScan = false
-var keepAliveTimer: DispatchSourceTimer?
 var durationTimer: DispatchSourceTimer?
 
 /// The puck repeats each report several times per press and then keeps
@@ -199,6 +198,12 @@ func scheduleAutoStop() {
 
 let central = ClickCentral()
 central.reportAllDevices = options.reportAll
+// The probe's `--keepalive` now drives the same hold the app uses, so a probe
+// run measures the real mechanism rather than a copy of it.
+central.keepsPuckAwake = options.keepAliveInterval > 0
+if options.keepAliveInterval > 0 {
+    central.keepAliveInterval = options.keepAliveInterval
+}
 
 central.onEvent = { event in
     switch event {
@@ -338,18 +343,6 @@ DispatchQueue.main.asyncAfter(deadline: .now() + options.scanSeconds) {
     if options.skipHandshake {
         log.line("(--no-handshake given: waiting for notifications without sending the start command)")
     }
-}
-
-// MARK: - Keep-alive
-
-if options.keepAliveInterval > 0 {
-    let timer = DispatchSource.makeTimerSource(queue: .main)
-    timer.schedule(deadline: .now() + options.keepAliveInterval, repeating: options.keepAliveInterval)
-    timer.setEventHandler {
-        central.sendKeepAlive()
-    }
-    timer.resume()
-    keepAliveTimer = timer
 }
 
 // MARK: - Shutdown
