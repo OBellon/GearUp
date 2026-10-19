@@ -13,5 +13,8 @@ print("Running against GearUpCore")
 runOpenBikeChecks(checks)
 runZwiftChecks(checks)
 runDrivetrainChecks(checks)
+runShiftRouterChecks(checks)
+runSettingsChecks(checks)
+runOpenBikeBridgeChecks(checks)
 
 exit(checks.report())

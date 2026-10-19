@@ -93,7 +93,7 @@ public struct ProtoReader {
 /// a bit set to `0` means it is **pressed**. Bits above 15 are always set.
 /// An idle right Click V2 reports `0xFFFFFFFF`; a Zwift Ride reports
 /// `0x0FFFFFFF`.
-public enum RideButtonMask: UInt32, CaseIterable {
+public enum RideButtonMask: UInt32, CaseIterable, Codable {
     case left = 0x0001
     case up = 0x0002
     case right = 0x0004
@@ -111,7 +111,7 @@ public enum RideButtonMask: UInt32, CaseIterable {
     case powerUpRight = 0x4000
     case onOffRight = 0x8000
 
-    /// Index of the bit this mask refers to, e.g. `z` → 8.
+    /// Index of the bit this mask refers to, e.g. `z` → 7.
     public var bit: Int {
         Int(rawValue.trailingZeroBitCount)
     }

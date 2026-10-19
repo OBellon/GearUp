@@ -1,40 +1,101 @@
 import SwiftUI
+import AppKit
 import GearUpCore
 
-/// Phase 1 will grow this into the full Apple-style shell (Ride, Buttons,
-/// Diagnostics and Settings). For now it is a small placeholder so the package
-/// builds and the app bundle can be produced from day one.
 @main
 struct GearUpApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var controller = GearUpController()
+
+    private var menuBarInserted: Binding<Bool> {
+        Binding(
+            get: { controller.settings.showInMenuBar },
+            set: { controller.settings.showInMenuBar = $0 }
+        )
+    }
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        Window("GearUp", id: "main") {
+            RootView()
+                .environmentObject(controller)
+                .frame(minWidth: 820, minHeight: 560)
+                .task { controller.start() }
         }
+        .defaultSize(width: 960, height: 660)
         .windowResizability(.contentMinSize)
+        .commands {
+            // A single-window utility: no "New Window".
+            CommandGroup(replacing: .newItem) {}
+        }
+
+        MenuBarExtra(isInserted: menuBarInserted) {
+            MenuBarContent()
+                .environmentObject(controller)
+        } label: {
+            Label("GearUp", systemImage: "gearshape.2.fill")
+        }
+        .menuBarExtraStyle(.menu)
     }
 }
 
-struct ContentView: View {
+/// Keeps the app alive when the window is closed: the bridge keeps working from
+/// the menu bar, which is how most riders will leave it running.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+}
+
+/// The menu bar menu: enough to see that things are working without opening the
+/// window.
+struct MenuBarContent: View {
+    @EnvironmentObject private var controller: GearUpController
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "gearshape.2.fill")
-                .font(.system(size: 52, weight: .regular))
-                .foregroundStyle(.tint)
+        Text("Gear \(controller.gear.currentGear) of \(controller.gear.gearCount)")
 
-            Text("GearUp")
-                .font(.largeTitle.weight(.semibold))
+        Divider()
 
-            Text("Virtual shifting bridge for MyWhoosh")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+        Text(clickSummary)
+        Text(controller.isAppConnected ? "MyWhoosh connected" : "Waiting for MyWhoosh")
 
-            Text("Phase 0 is in progress. Run `make probe` to help map your Zwift Click V2 buttons.")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
+        Divider()
+
+        Button("Shift Up") { controller.sendTestShift(.shiftUp) }
+        Button("Shift Down") { controller.sendTestShift(.shiftDown) }
+
+        Divider()
+
+        Button(controller.isRunning ? "Stop Bridging" : "Start Bridging") {
+            controller.toggle()
         }
-        .padding(48)
-        .frame(minWidth: 520, minHeight: 360)
+
+        Button("Show GearUp") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "main")
+        }
+
+        Button("Hide from Menu Bar") {
+            controller.settings.showInMenuBar = false
+        }
+
+        Divider()
+
+        Button("Quit GearUp") {
+            NSApp.terminate(nil)
+        }
+        .keyboardShortcut("q")
+    }
+
+    private var clickSummary: String {
+        guard controller.isRunning else { return "Bridging paused" }
+        switch controller.click.phase {
+        case .connected: return "Click V2 connected"
+        case .searching: return "Looking for the Click V2"
+        case .connecting: return "Connecting to the Click V2"
+        case .unavailable: return "Bluetooth unavailable"
+        case .off: return "Click V2 off"
+        }
     }
 }

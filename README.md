@@ -16,14 +16,14 @@ MyWhoosh can never get out of sync.
 
 ## Status
 
-Phase 0 — protocol verification.
+Phase 1 — the bridge is wired up end to end.
 
 | Phase | Content | State |
 | --- | --- | --- |
-| 0 | Repo, core codecs, `gearup-probe` diagnostic | 🚧 in progress |
-| 1 | App shell, Click V2 connection, OBC transport, shifting | ⏳ planned |
+| 0 | Repo, core codecs, `gearup-probe` diagnostic | ✅ protocol verified on hardware |
+| 1 | App shell, Click V2 connection, OBC transport, shifting | 🚧 in progress |
 | 2 | Settings: gear range, button mapping | ⏳ planned |
-| 3 | Both pucks, menu bar, icon and DMG | ⏳ planned |
+| 3 | Both pucks, icon and DMG | ⏳ planned |
 
 Only the **right Click V2 puck** is supported at the start. The architecture keeps
 the left puck possible later without rework.
@@ -39,9 +39,11 @@ the left puck possible later without rework.
 ```
 Sources/
   GearUpCore/        Shared logic, no UI and no external dependencies
+    App/             GearUpController, settings, the event log
     BLE/             ClickCentral: scan, connect, handshake, notifications
+    OpenBike/        OBC transports: Bluetooth peripheral, mDNS + TCP server
     Protocol/        OpenBikeCodec, ZwiftClickCodec, UUID tables
-    Shifting/        Drivetrain model
+    Shifting/        Drivetrain model and the ShiftRouter
     Support/         Hex helpers
   GearUpApp/         SwiftUI app (assembled into GearUp.app)
   GearUpProbe/       Phase 0 diagnostic CLI
@@ -51,6 +53,13 @@ scripts/             App bundle assembly, Info.plist templates
 
 Everything is built with SwiftPM. There are no third-party dependencies: only
 SwiftUI, CoreBluetooth, Network and OSLog.
+
+> **`@State` is unusable here.** GearUp builds with the Command Line Tools alone,
+> and in the SDK those ship `@State` is a macro whose compiler plugin
+> (`SwiftUIMacros`) only exists inside Xcode. View-local state therefore lives in
+> a small `ObservableObject` (`ViewState` in `Components.swift`) instead of
+> `@State`. Everything else — `@StateObject`, `@EnvironmentObject`, `@Published`,
+> `@Environment` — is an ordinary property wrapper and works normally.
 
 ## Build and test
 
@@ -66,6 +75,38 @@ make run             # build the app and open it
 > XCTest and swift-testing both ship with Xcode, which GearUp does not require,
 > so the checks live in a small dependency-free runner (`Sources/GearUpChecks`)
 > and exit non-zero when something fails.
+
+## Using the app
+
+```sh
+make run        # build, sign and open .build/GearUp.app
+```
+
+The window has three tabs: **Ride** (gear readout, the Click V2 card and the
+MyWhoosh card), **Diagnostics** (the live event log) and **Settings**.
+
+Everything is logged twice: to the Diagnostics tab and to
+
+```
+~/Library/Logs/GearUp/GearUp.log
+```
+
+which is the file to look at (or attach) when something does not work.
+
+1. Launch GearUp and **approve both permission prompts** — Bluetooth, and Local
+   Network when the network transport starts. The app is ad-hoc signed, so a
+   rebuild is a new identity and macOS asks again. Setting
+   `GEARUP_SIGN_IDENTITY` to a stable identity avoids that.
+2. Press a button on the **right** puck to wake it. GearUp connects on sight and
+   the Ride tab shows the gear changing as you press `+` and `B`.
+   The pair of buttons in the window sends the same shifts without the puck, so
+   the MyWhoosh connection can be checked on its own.
+3. In MyWhoosh, enable **Virtual Shifting**, open **Device Connection** and pick
+   the OpenBikeControl device. The MyWhoosh card switches to *Connected* and
+   names the app it heard from.
+
+Only the **right Click V2 puck** is driven in this phase; the left one needs a
+Zwift unlock before it reports anything useful.
 
 ## Phase 0: mapping your Click V2
 

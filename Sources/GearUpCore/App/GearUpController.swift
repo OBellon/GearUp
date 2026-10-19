@@ -1,0 +1,452 @@
+import Foundation
+import Combine
+
+/// What the Zwift Click V2 is doing, for the UI.
+public struct ClickStatus: Equatable {
+    public enum Phase: String, Equatable {
+        case off
+        case unavailable
+        case searching
+        case connecting
+        case connected
+    }
+
+    public var phase: Phase
+    public var name: String?
+    public var identifier: String?
+    public var rssi: Int?
+    public var battery: Int?
+    public var note: String?
+
+    public init(
+        phase: Phase = .off,
+        name: String? = nil,
+        identifier: String? = nil,
+        rssi: Int? = nil,
+        battery: Int? = nil,
+        note: String? = nil
+    ) {
+        self.phase = phase
+        self.name = name
+        self.identifier = identifier
+        self.rssi = rssi
+        self.battery = battery
+        self.note = note
+    }
+
+    public static let idle = ClickStatus()
+
+    public var title: String {
+        switch phase {
+        case .off: return "Off"
+        case .unavailable: return "Unavailable"
+        case .searching: return "Looking for the puck"
+        case .connecting: return "Connecting"
+        case .connected: return "Connected"
+        }
+    }
+
+    public var detail: String? {
+        switch phase {
+        case .off: return "Starting the bridge turns the radio on."
+        case .unavailable: return note
+        case .searching: return note ?? "Press a button on the puck to wake it up."
+        case .connecting: return name
+        case .connected:
+            var parts: [String] = []
+            if let name { parts.append(name) }
+            if let identifier { parts.append("id \(identifier)") }
+            if let rssi { parts.append("\(rssi) dBm") }
+            if let battery { parts.append("battery \(battery)%") }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+    }
+}
+
+/// Ties the whole bridge together:
+///
+///     Zwift Click V2 ──BLE──▶ ShiftRouter ──▶ OpenBikeControl ──▶ MyWhoosh
+///
+/// The Click V2 is the only thing GearUp reads, and the trainer app is the only
+/// thing it talks to. GearUp never connects to the trainer, because MyWhoosh
+/// owns resistance and would lose track of its own gear if two things drove it.
+///
+/// Everything runs on the main queue — CoreBluetooth is created with a nil queue
+/// and Network with `.main` — so the published state can be mutated directly.
+public final class GearUpController: ObservableObject {
+
+    // MARK: - Published state
+
+    @Published public private(set) var isRunning = false
+    @Published public private(set) var click = ClickStatus.idle
+    @Published public private(set) var gear: Drivetrain
+    @Published public private(set) var transports: [TransportState] = []
+    @Published public private(set) var pressedButtons: Set<RideButtonMask> = []
+    @Published public private(set) var lastShiftAction: ShiftAction?
+    @Published public private(set) var shiftCount = 0
+
+    /// The most recent settings change is written straight through to disk.
+    @Published public var settings: GearUpSettings {
+        didSet {
+            guard settings != oldValue else { return }
+            store.save(settings)
+            if settings.buttonMap != oldValue.buttonMap {
+                router.buttonMap = settings.buttonMap
+                log.add(
+                    "Button map: \(settings.shiftUpButton.name) shifts up, \(settings.shiftDownButton.name) shifts down."
+                )
+            }
+            if settings.gearCount != oldValue.gearCount {
+                gear.setGearCount(settings.gearCount)
+                log.add("Gear readout set to \(gear.gearCount) gears.")
+            }
+            if settings.transportMode != oldValue.transportMode {
+                log.add("Transport changed to \(settings.transportMode.title).")
+                applyTransportMode()
+            }
+        }
+    }
+
+    public let log = EventLog()
+
+    /// One transport's state, as the UI sees it.
+    public struct TransportState: Identifiable, Equatable {
+        public let kind: OpenBikeTransportKind
+        public var status: OpenBikeStatus
+        public var appInfo: OpenBikeAppInfo?
+        public var id: String { kind.rawValue }
+    }
+
+    // MARK: - Collaborators
+
+    private let store: SettingsStore
+    private let clickCentral = ClickCentral()
+    private let router: ShiftRouter
+    private let bluetoothPeripheral = OpenBikePeripheral()
+    private let networkServer = OpenBikeNetworkServer()
+
+    private var allTransports: [OpenBikeTransport] { [bluetoothPeripheral, networkServer] }
+
+    /// The last notification, kept so the Click V2's flood of identical reports
+    /// can be collapsed into a single line with a count.
+    private var lastNotificationBytes: [UInt8]?
+    private var repeatCount = 0
+
+    // MARK: - Derived state
+
+    /// The app info of whichever transport has an app attached.
+    public var connectedApp: OpenBikeAppInfo? {
+        transports.compactMap(\.appInfo).first
+    }
+
+    public var isAppConnected: Bool {
+        transports.contains { $0.status.isConnected }
+    }
+
+    public var activeTransportCount: Int {
+        transports.filter { $0.status.isRunning }.count
+    }
+
+    // MARK: - Lifecycle
+
+    public init(store: SettingsStore = SettingsStore()) {
+        self.store = store
+        let settings = store.load()
+        self.settings = settings
+        self.gear = Drivetrain(gearCount: settings.gearCount)
+        self.router = ShiftRouter(buttonMap: settings.buttonMap)
+
+        router.onShift = { [weak self] action, _ in
+            self?.perform(action)
+        }
+        router.onButtonChange = { [weak self] button, isPressed in
+            guard let self else { return }
+            if isPressed {
+                pressedButtons.insert(button)
+            } else {
+                pressedButtons.remove(button)
+            }
+        }
+        clickCentral.onEvent = { [weak self] event in
+            self?.handleClickEvent(event)
+        }
+        for transport in allTransports {
+            transport.delegate = self
+        }
+        transports = [
+            TransportState(kind: .bluetooth, status: bluetoothPeripheral.status),
+            TransportState(kind: .network, status: networkServer.status),
+        ]
+
+        log.add("GearUp ready. Button map: \(settings.shiftUpButton.name) shifts up, \(settings.shiftDownButton.name) shifts down.")
+        log.add("Looking for a Zwift Click V2 (right puck).", level: .info)
+    }
+
+    /// Starts looking for the puck and opens the configured transports.
+    public func start() {
+        guard !isRunning else { return }
+        isRunning = true
+        click = ClickStatus(phase: .searching, note: "Press a button on the puck to wake it up.")
+        log.add("Bridging enabled (\(settings.transportMode.title)).", level: .success)
+        clickCentral.startScan()
+        applyTransportMode()
+    }
+
+    /// Stops everything: the radio scan and every advertised transport.
+    public func stop() {
+        guard isRunning else { return }
+        isRunning = false
+        clickCentral.stopScan()
+        clickCentral.disconnect()
+        for transport in allTransports { transport.stop() }
+        router.reset()
+        pressedButtons.removeAll()
+        updateTransportStates()
+        click = .idle
+        log.add("Bridging stopped.", level: .warning)
+    }
+
+    public func toggle() {
+        isRunning ? stop() : start()
+    }
+
+    // MARK: - Shifting
+
+    /// Sends a shift without the puck, so the rider can check the connection to
+    /// MyWhoosh before touching the bike.
+    public func sendTestShift(_ action: ShiftAction) {
+        log.add("Sending a test \(action.title.lowercased()).")
+        perform(action)
+    }
+
+    private func perform(_ action: ShiftAction) {
+        guard action != .none else { return }
+
+        switch action {
+        case .shiftUp: gear.shiftUp()
+        case .shiftDown: gear.shiftDown()
+        case .none: return
+        }
+
+        lastShiftAction = action
+        shiftCount += 1
+        log.add("\(action.title) → gear \(gear.currentGear) of \(gear.gearCount).", level: .success)
+
+        let connected = allTransports.filter { $0.status.isConnected }
+        guard !connected.isEmpty else {
+            log.add("Nothing is connected to receive the shift.", level: .warning)
+            return
+        }
+        for transport in connected { transport.sendTap(for: action) }
+    }
+
+    /// Puts the local gear readout back to 1, e.g. after a restart.
+    public func resetGear() {
+        gear.reset(to: 1)
+        log.add("Gear readout reset to \(gear.currentGear).")
+    }
+
+    // MARK: - Transports
+
+    private func applyTransportMode() {
+        guard isRunning else { return }
+        let wanted = settings.transportMode.kinds
+        for transport in allTransports {
+            if wanted.contains(transport.kind) {
+                if !transport.status.isRunning { transport.start() }
+            } else if transport.status != .off {
+                transport.stop()
+            }
+        }
+        updateTransportStates()
+    }
+
+    private func updateTransportStates() {
+        transports = allTransports.map { transport in
+            TransportState(kind: transport.kind, status: transport.status, appInfo: transport.appInfo)
+        }
+    }
+
+    // MARK: - Click V2
+
+    private func handleClickEvent(_ event: ClickCentralEvent) {
+        switch event {
+        case .state(let state):
+            handleBluetoothState(state)
+
+        case .discovered(let device):
+            // v1 drives the right puck only: the left one needs a Zwift unlock
+            // before it will report anything useful.
+            if device.isClickV2Right {
+                click.phase = .connecting
+                click.name = device.name
+                click.identifier = String(device.id.uuidString.prefix(8))
+                log.add("Found a Click V2 right puck (\(device.id.uuidString.prefix(8)), \(device.rssi) dBm). Connecting.", level: .success)
+                clickCentral.connect(to: device.id)
+            } else if device.isClickV2Left {
+                log.add("Ignoring a Click V2 left puck: the left side needs a Zwift unlock.")
+            } else {
+                log.add("Ignoring \(device.zwiftDeviceTypeName ?? device.summary): not a Click V2 right puck.")
+            }
+
+        case .connecting(let device):
+            click.phase = .connecting
+            click.name = device.name
+            log.add("Connecting to \(device.summary)…")
+
+        case .connected(let device):
+            click.phase = .connected
+            click.name = device.name
+            click.identifier = String(device.id.uuidString.prefix(8))
+            click.note = nil
+            log.add("Click V2 connected.", level: .success)
+
+        case .services(let uuids):
+            log.add("Services: \(uuids.joined(separator: ", "))")
+
+        case .characteristic(let uuid, let properties):
+            log.add("  \(uuid) [\(properties)]")
+
+        case .subscribed(let uuid, let enabled):
+            log.add("  \(enabled ? "subscribed to" : "unsubscribed from") \(uuid)")
+
+        case .handshakeSent(let bytes):
+            log.add("Sending the activation handshake (\(bytes.hexString)).")
+
+        case .notification(let characteristic, let bytes, let decoded):
+            handleNotification(characteristic: characteristic, bytes: bytes, decoded: decoded)
+
+        case .rssi(let value):
+            click.rssi = value
+
+        case .log(let message):
+            log.add("Click V2: \(message)")
+
+        case .error(let message):
+            log.add(message, level: .error)
+
+        case .disconnected(let reason):
+            router.reset()
+            pressedButtons.removeAll()
+            click.phase = isRunning ? .searching : .off
+            click.rssi = nil
+            click.battery = nil
+            click.note = "Press a button on the puck to reconnect."
+            lastNotificationBytes = nil
+            repeatCount = 0
+            let suffix = reason.map { " (\($0))" } ?? ""
+            log.add("Click V2 disconnected\(suffix). Looking for it again.", level: .warning)
+        }
+    }
+
+    private func handleBluetoothState(_ state: ClickCentralState) {
+        switch state {
+        case .poweredOn:
+            if click.phase == .unavailable || click.phase == .off, isRunning {
+                click = ClickStatus(phase: .searching, note: "Press a button on the puck to wake it up.")
+            }
+        case .poweredOff:
+            click.phase = .unavailable
+            click.note = "Bluetooth is off. Turn it on in System Settings."
+            log.add("Bluetooth is off.", level: .error)
+        case .unauthorized:
+            click.phase = .unavailable
+            click.note = "Bluetooth permission denied. Grant it in System Settings → Privacy & Security → Bluetooth."
+            log.add("Bluetooth permission denied.", level: .error)
+        case .unsupported:
+            click.phase = .unavailable
+            click.note = "This Mac does not support Bluetooth Low Energy."
+            log.add("Bluetooth Low Energy is unsupported.", level: .error)
+        case .unknown, .resetting:
+            break
+        }
+    }
+
+    private func handleNotification(characteristic: String, bytes: [UInt8], decoded: ZwiftNotification?) {
+        // The puck repeats every report several times per press, then repeats
+        // the released state for about a second. Collapsing the repeats keeps
+        // the log readable.
+        if bytes == lastNotificationBytes {
+            repeatCount += 1
+            return
+        }
+        if repeatCount > 0 {
+            log.add("  (the report above repeated \(repeatCount) more time\(repeatCount == 1 ? "" : "s"))")
+            repeatCount = 0
+        }
+        lastNotificationBytes = bytes
+
+        guard let decoded else {
+            log.add("Unreadable notification \(bytes.hexString) on \(characteristic).", level: .warning)
+            return
+        }
+
+        switch decoded {
+        case .rideKeyPad(let status):
+            let names = status.pressedButtons.map(\.name)
+            if !names.isEmpty {
+                log.add("Click V2: \(names.joined(separator: " + ")) pressed.")
+            }
+            router.handle(status)
+
+        case .clickKeyPad(let status):
+            let plus = status.plusPressed.map { $0 ? "pressed" : "released" }
+            let minus = status.minusPressed.map { $0 ? "pressed" : "released" }
+            log.add("Click V2 (legacy report): plus=\(plus ?? "—") minus=\(minus ?? "—")")
+
+        case .battery(let level, let chargingState, _):
+            click.battery = level
+            let state = chargingState.map { ", charging state \($0)" } ?? ""
+            log.add("Click V2 battery \(level)%\(state).")
+
+        case .handshake(let value):
+            log.add("Click V2 acknowledged the handshake (\(value.hexString)).", level: .success)
+
+        case .deviceInfo(let value):
+            log.add("Click V2 device info: \(value.hexString)")
+
+        case .empty:
+            log.add("Click V2 sent an empty report.")
+
+        case .disconnect:
+            log.add("Click V2 reported a disconnect.", level: .warning)
+
+        case .unknown(let type, let payload):
+            log.add(String(format: "Unknown message 0x%02X %@", type, payload.hexString), level: .warning)
+        }
+    }
+}
+
+// MARK: - OpenBikeTransportDelegate
+
+extension GearUpController: OpenBikeTransportDelegate {
+
+    public func transportDidChangeStatus(_ transport: OpenBikeTransport) {
+        updateTransportStates()
+    }
+
+    public func transport(_ transport: OpenBikeTransport, didConnect peer: String) {
+        updateTransportStates()
+        log.add("\(transport.kind.title): \(peer) connected.", level: .success)
+    }
+
+    public func transport(_ transport: OpenBikeTransport, didDisconnect peer: String) {
+        updateTransportStates()
+        log.add("\(transport.kind.title): \(peer) disconnected.", level: .warning)
+    }
+
+    public func transport(_ transport: OpenBikeTransport, didReceiveAppInfo info: OpenBikeAppInfo) {
+        updateTransportStates()
+        log.add("\(transport.kind.title): \(info.appID) \(info.appVersion) connected.", level: .success)
+        if !info.supportedButtonNames.contains(OpenBikeButton.shiftUp.name) {
+            log.add(
+                "\(info.appID) does not list “\(OpenBikeButton.shiftUp.name)” as supported; shifts may be ignored.",
+                level: .warning
+            )
+        }
+    }
+
+    public func transport(_ transport: OpenBikeTransport, log message: String, level: LogEntry.Level) {
+        log.add("\(transport.kind.title): \(message)", level: level)
+    }
+}

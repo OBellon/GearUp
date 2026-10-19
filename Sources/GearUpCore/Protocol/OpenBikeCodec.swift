@@ -272,6 +272,26 @@ public enum OpenBikeCodec {
 
     // MARK: - Stream framing
 
+    /// Total length of the app-info message at the start of `bytes`, or `nil`
+    /// while the header field it stops at has not arrived yet.
+    ///
+    /// The protocol has no length prefix, so a stream consumer has to walk the
+    /// self-describing fields of an app-info message to find where it ends.
+    public static func appInfoMessageLength(_ bytes: [UInt8]) -> Int? {
+        guard bytes.count >= 4, bytes[0] == OpenBikeMessageType.appInfo.rawValue else { return nil }
+        var index = 2 // type + version
+        guard let appIDLength = readLength(bytes, &index) else { return nil }
+        index += appIDLength
+        guard index < bytes.count else { return nil }
+        guard let appVersionLength = readLength(bytes, &index) else { return nil }
+        index += appVersionLength
+        guard index < bytes.count else { return nil }
+        guard let buttonCount = readLength(bytes, &index) else { return nil }
+        index += buttonCount
+        guard index <= bytes.count else { return nil }
+        return index
+    }
+
     /// Reassembles OpenBikeControl messages from a TCP byte stream.
     ///
     /// The protocol has no explicit length prefix. Message types that an app
@@ -301,7 +321,7 @@ public enum OpenBikeCodec {
                     }
 
                 case OpenBikeMessageType.appInfo.rawValue:
-                    guard let total = Self.appInfoMessageLength(buffer) else {
+                    guard let total = OpenBikeCodec.appInfoMessageLength(buffer) else {
                         // Not enough bytes yet, or malformed. A malformed
                         // message cannot be resynchronised safely; drop the
                         // leading byte and let the next loop try again.
@@ -348,21 +368,6 @@ public enum OpenBikeCodec {
 
         public mutating func reset() {
             buffer.removeAll()
-        }
-
-        private static func appInfoMessageLength(_ bytes: [UInt8]) -> Int? {
-            guard bytes.count >= 4 else { return nil }
-            var index = 2 // type + version
-            guard let appIDLength = readLength(bytes, &index) else { return nil }
-            index += appIDLength
-            guard index < bytes.count else { return nil }
-            guard let appVersionLength = readLength(bytes, &index) else { return nil }
-            index += appVersionLength
-            guard index < bytes.count else { return nil }
-            guard let buttonCount = readLength(bytes, &index) else { return nil }
-            index += buttonCount
-            guard index <= bytes.count else { return nil }
-            return index
         }
     }
 
