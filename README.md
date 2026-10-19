@@ -385,6 +385,24 @@ actually powered down, which needs a full minute of no presses *and* no resets �
 state a ten-minute descent reaches and a probe run that presses every few seconds
 never does.
 
+**The retry is not part of the hold.** How a dropped puck comes back is a connect
+to the handle CoreBluetooth has already handed over — it introduces a peripheral
+once, so no amount of scanning will turn it up again. A connect to a puck that is
+not there *stays pending* until it advertises, and that costs the puck nothing:
+it is the same radio silence as scanning, and a puck in standby is powered down
+either way. So the way back is armed whenever GearUp is running and the link is
+gone, held or not, and it is the only part of this that is free.
+
+That distinction is what makes an app left open all evening work: the press that
+wakes a sleeping puck is answered, the link comes back, and the press after that
+shifts or changes the volume. It also closes an older blind spot. With no client
+connected and nothing held, a drop used to be met with a rescan — which could
+never rediscover a peripheral CoreBluetooth reports once — so the app went quiet
+until it was relaunched, whatever was pressed. The two behaviours differ by
+exactly one thing: a *held* puck is reset to keep its window open; an *unheld*
+one is only waited for. The one case where GearUp lets go for good is stopping
+the bridge.
+
 Two writes were tried first and measured to do no good on their own. The bare
 `RideOn` header is answered — the puck echoes it — but does nothing about the
 sleep: one every 20 seconds, and the link still died 61 seconds after the last
@@ -436,9 +454,10 @@ GearUp holds the puck while, and only while, a press has somewhere to go: a
 client is connected, or the settings screen is waiting for a button. Holding it
 costs battery, and holding it for nothing spends a coin cell on a controller
 nobody is using, so the rest of the time the puck is left alone to power down on
-its own minute. While it is held, GearUp also retries a dropped link by handle —
-CoreBluetooth introduces a peripheral once, so a rescan cannot turn up a puck it
-has already seen.
+its own minute. What is *not* switched off with the hold is the way back: GearUp
+keeps a pending connect on the puck it last saw, which costs the puck nothing and
+is what makes a press after an idle evening land. A stopped bridge lets go
+completely.
 
 What the hold adds to a Zwift session is the reset, not the link: the radio is up
 in both. A press opens the puck's window by itself, so a rider who is shifting is

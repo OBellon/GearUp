@@ -485,8 +485,15 @@ public final class GearUpController: ObservableObject {
                 click.note = "Reconnecting…"
                 log.add("Click V2 disconnected\(suffix). Reconnecting.", level: .warning)
             } else {
-                click.note = "Press a button on the puck to wake it up."
-                log.add("Click V2 disconnected\(suffix). Leaving it to sleep.", level: .warning)
+                // Not held, so the resets stop and the puck powers down on its own
+                // minute. The way back is armed all the same: the press that wakes
+                // it is answered, and the press after that one does its job.
+                click.note = "Sleeping; a press brings it back."
+                log.add(
+                    "Click V2 disconnected\(suffix). Leaving it to sleep; the press that wakes it "
+                    + "brings the link back, and the one after it lands.",
+                    level: .warning
+                )
             }
         }
     }

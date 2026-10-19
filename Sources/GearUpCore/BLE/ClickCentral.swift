@@ -134,6 +134,15 @@ public final class ClickCentral: NSObject {
     /// only be picked up again by connecting to the handle we already have.
     private var lastTargetID: UUID?
 
+    /// True while the last disconnect was GearUp's own doing — the bridge being
+    /// stopped — so a stopped bridge does not immediately reconnect to the puck
+    /// it just let go.
+    private var didDisconnectOnPurpose = false
+
+    /// Whether the last drop read as the puck's own sleep, so the log can say
+    /// that the retry brought it back rather than leaving two bare lines.
+    private var returningFromSleep = false
+
     private var watchTimer: Timer?
     private var restartTimer: Timer?
     private var reconnectTimer: Timer?
@@ -179,6 +188,9 @@ public final class ClickCentral: NSObject {
     /// Holding costs battery, so `GearUpController` turns this on only while a
     /// press has somewhere to go: a client is connected, or the settings screen
     /// is waiting for a button.
+    ///
+    /// This governs the *reset* only. Getting a dropped puck back is a separate
+    /// matter and is not expensive: see `reconnectInterval`.
     public var keepsPuckAwake = false {
         didSet {
             guard keepsPuckAwake != oldValue else { return }
@@ -189,11 +201,12 @@ public final class ClickCentral: NSObject {
                 lastPressAt = Date()
                 isReleased = false
                 startHolding()
-                startReconnecting()
             } else {
+                // The resets stop and the puck is left to power down on its own
+                // minute. The way back stays armed all the same.
                 stopHolding()
-                stopReconnecting()
             }
+            armReconnect()
         }
     }
 
@@ -273,13 +286,24 @@ public final class ClickCentral: NSObject {
     /// other than the bare reboot.
     public var resetPayload: [UInt8] = ClickCentral.resetCommand
 
-    /// How often a dropped link is retried while the puck is held.
+    /// How often a dropped link is retried.
     ///
     /// The hold drops the link on purpose now and then — a reset reboots the puck
-    /// — so this is also what makes that cost about a second. Only a genuinely
-    /// disconnected peripheral is retried, so attempts cannot stack up behind each
-    /// other, and a sleeping puck wakes on a button press and answers straight
-    /// away.
+    /// — so this is also what makes that cost about a second. Both are the same
+    /// mechanism, and it is deliberately **not** part of the hold:
+    ///
+    /// A connect to a peripheral that is not there stays *pending* until it
+    /// advertises, which costs the puck nothing at all — it is the same radio
+    /// silence as scanning, and a puck in standby is powered down whether GearUp
+    /// waits for it or not. So the retry is armed whenever the puck is known and
+    /// the link is gone, held or not, and the press that wakes a sleeping puck is
+    /// answered instead of being shouted into an empty room. What it buys is that
+    /// GearUp left open for hours still shifts, or changes the volume, on the
+    /// press after the one that woke the puck.
+    ///
+    /// Only a genuinely disconnected peripheral is retried, so attempts cannot
+    /// stack up behind each other, and while one is pending there is nothing to
+    /// do but wait for it to resolve — a failure re-arms the retry.
     public static let reconnectInterval: TimeInterval = 1
 
     public var isConnected: Bool { target?.state == .connected }
@@ -294,6 +318,11 @@ public final class ClickCentral: NSObject {
 
     public func startScan() {
         wantsScan = true
+        // A scan started afresh is the one moment a puck already seen in this run
+        // is worth announcing again: CoreBluetooth reports a peripheral to
+        // `didDiscover` once, so a bridge that was stopped and started would
+        // otherwise never see the puck it handed back.
+        announcedPeripherals.removeAll()
         guard state.isReady else {
             onEvent?(.log("Waiting for Bluetooth to become available…"))
             return
@@ -303,9 +332,7 @@ public final class ClickCentral: NSObject {
 
     public func stopScan() {
         wantsScan = false
-        if state.isReady {
-            central.stopScan()
-        }
+        stopRadioScan()
     }
 
     public func connect(to id: UUID) {
@@ -313,7 +340,9 @@ public final class ClickCentral: NSObject {
             onEvent?(.error("Unknown peripheral \(id.uuidString). Run a scan first."))
             return
         }
-        stopScan()
+        // The radio stops looking — the handle is the way back from here — but
+        // GearUp still wants the puck, which is what `wantsScan` means.
+        stopRadioScan()
         let device = discoveredDevices[id] ?? ClickDevice(
             id: id,
             name: peripheral.name,
@@ -332,6 +361,7 @@ public final class ClickCentral: NSObject {
 
     public func disconnect() {
         guard let target else { return }
+        didDisconnectOnPurpose = true
         central.cancelPeripheralConnection(target)
     }
 
@@ -482,10 +512,12 @@ public final class ClickCentral: NSObject {
     /// `didDiscover` once, so scanning alone never finds a dropped puck again.
     ///
     /// A sleeping puck wakes on a button press and answers straight away, so this
-    /// is also how the app recovers when a rider picks the controller up.
+    /// is also how the app recovers when a rider picks the controller up — and,
+    /// because a pending connect costs the puck nothing, it is armed whether or
+    /// not the puck is being held.
     private func startReconnecting() {
         guard reconnectTimer == nil, let id = lastTargetID, let peripheral = peripherals[id] else { return }
-        guard peripheral.state != .connected else { return }
+        guard peripheral.state == .disconnected else { return }
         reconnectTimer = Timer.scheduledTimer(
             withTimeInterval: Self.reconnectInterval,
             repeats: true
@@ -499,21 +531,46 @@ public final class ClickCentral: NSObject {
         reconnectTimer = nil
     }
 
+    /// Whether a dropped link should be answered with a retry.
+    ///
+    /// Two rules matter, and they are worth having in one place: a puck that
+    /// dropped while GearUp is running is always worth waiting for — held or not,
+    /// because a pending connect costs the puck nothing — and a bridge that let
+    /// the puck go on purpose stays let go.
+    public static func shouldReconnectAfterDrop(bridgeIsRunning: Bool, deliberate: Bool) -> Bool {
+        bridgeIsRunning && !deliberate
+    }
+
+    /// Arms the way back, unless the bridge itself just let the puck go.
+    private func armReconnect() {
+        guard ClickCentral.shouldReconnectAfterDrop(
+            bridgeIsRunning: wantsScan,
+            deliberate: didDisconnectOnPurpose
+        ) else { return }
+        startReconnecting()
+        // Ask at once instead of waiting out the first tick.
+        retryConnection()
+    }
+
     private func retryConnection() {
-        guard keepsPuckAwake, let id = lastTargetID, let peripheral = peripherals[id] else {
+        guard let id = lastTargetID, let peripheral = peripherals[id] else {
             stopReconnecting()
             return
         }
-        if peripheral.state == .connected {
+        switch peripheral.state {
+        case .connected:
             stopReconnecting()
-            return
+        case .connecting:
+            // A connect that is already in flight stays pending until the puck
+            // advertises, so there is nothing to do and no reason for a timer to
+            // keep asking. `didFailToConnect` re-arms if it comes to nothing.
+            stopReconnecting()
+        case .disconnected:
+            target = peripheral
+            central.connect(peripheral, options: nil)
+        default:
+            break
         }
-        // Only a genuinely disconnected peripheral is retried: a connect the
-        // system is already waiting on stays pending until the puck advertises, so
-        // asking again every tick would only stack up.
-        guard peripheral.state == .disconnected else { return }
-        target = peripheral
-        central.connect(peripheral, options: nil)
     }
 
     // MARK: - Private
@@ -527,6 +584,12 @@ public final class ClickCentral: NSObject {
             withServices: nil,
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
+    }
+
+    private func stopRadioScan() {
+        if state.isReady {
+            central.stopScan()
+        }
     }
 
     private func isZwiftPeripheral(advertisementData: [String: Any], name: String?) -> Bool {
@@ -627,6 +690,15 @@ extension ClickCentral: CBCentralManagerDelegate {
             manufacturerData: nil
         )
         onEvent?(.connected(connectedDevice!))
+        // A reconnect that followed the puck's own sleep is the retry doing its
+        // job, which is worth saying: it is the difference between a link that
+        // came back because a rider picked the puck up and one that never came
+        // back at all.
+        if returningFromSleep {
+            returningFromSleep = false
+            onEvent?(.log("The puck answered the retry: it is back after its sleep, so a press "
+                + "reached it. That press is lost; the next one shifts as usual."))
+        }
         peripheral.delegate = self
         onEvent?(.log("Discovering services…"))
         peripheral.discoverServices(nil)
@@ -638,6 +710,9 @@ extension ClickCentral: CBCentralManagerDelegate {
         error: Error?
     ) {
         onEvent?(.error("Failed to connect: \(error?.localizedDescription ?? "unknown error")"))
+        // The attempt is spent, so the way back has to be re-armed or an
+        // out-of-range puck would be given up on for good.
+        armReconnect()
     }
 
     public func centralManager(
@@ -663,6 +738,7 @@ extension ClickCentral: CBCentralManagerDelegate {
         } else {
             reason = error?.localizedDescription
         }
+        returningFromSleep = !deliberate && !didDisconnectOnPurpose && quiet >= Self.sleepDropWindow
         onEvent?(.disconnected(reason))
         target = nil
         connectedDevice = nil
@@ -672,19 +748,21 @@ extension ClickCentral: CBCentralManagerDelegate {
         didSendHandshake = false
         stopHolding()
         lastResetSentAt = nil
-        // The link is gone whatever happens next; if the puck is meant to be
-        // held, retrying by handle is how it comes back without a rescan.
-        if keepsPuckAwake {
-            startReconnecting()
-            // Ask again at once instead of waiting out the first tick. What a reset
-            // actually costs is the puck's own reboot — measured at 2.3 s from drop
-            // to session, the same whether the retry was immediate or a tick away —
-            // so this only makes sure the ask is never the delay.
-            retryConnection()
-        } else {
+        // The link is gone whatever happens next, and the way back is a connect to
+        // the handle we already have. That is armed whether or not the puck is
+        // being held — a pending connect costs the puck nothing — so a puck that
+        // is left to sleep still answers the press that wakes it. The one
+        // exception is GearUp letting go on purpose: a stopped bridge stays
+        // stopped.
+        if didDisconnectOnPurpose {
+            didDisconnectOnPurpose = false
             stopReconnecting()
+        } else {
+            armReconnect()
         }
-        if wantsScan { beginScan() }
+        // Nothing to retry — a puck this run has never seen — is the only case a
+        // radio scan can help with; the retry covers the rest.
+        if wantsScan, lastTargetID == nil { beginScan() }
     }
 }
 

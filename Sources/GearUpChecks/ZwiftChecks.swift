@@ -268,6 +268,26 @@ func runZwiftChecks(_ checks: Checks) {
             ClickCentral.sleepDropWindow < 60,
             "and before the sleep itself, so a puck that really went missing is not excused"
         )
+
+        // Getting a dropped puck back is not part of the hold. A pending connect
+        // costs the puck nothing — it is the same radio silence as scanning, and a
+        // puck in standby is powered down either way — so a link that dropped while
+        // GearUp is running is always waited for. This is what an app left open all
+        // evening needs: the press that wakes the puck is answered, and the press
+        // after it does its job. The one exception is GearUp letting go on purpose,
+        // where a stopped bridge must stay stopped.
+        checks.expect(
+            ClickCentral.shouldReconnectAfterDrop(bridgeIsRunning: true, deliberate: false),
+            "a drop is retried even when nothing is held or connected"
+        )
+        checks.expect(
+            ClickCentral.shouldReconnectAfterDrop(bridgeIsRunning: true, deliberate: true) == false,
+            "a bridge that let the puck go on purpose does not grab it back"
+        )
+        checks.expect(
+            ClickCentral.shouldReconnectAfterDrop(bridgeIsRunning: false, deliberate: false) == false,
+            "and a stopped bridge does not retry at all"
+        )
     }
 
     checks.group("Click V2 data objects") {
