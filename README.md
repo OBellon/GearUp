@@ -148,7 +148,8 @@ Options:
 | `--duration <n>` | Stop n seconds after the handshake (default: run until Ctrl-C) |
 | `--connect <uuid>` | Connect to a specific peripheral identifier |
 | `--all` | List every Bluetooth device, not only Zwift ones |
-| `--keepalive <n>` | Hold the puck awake, resetting and restarting it every n seconds |
+| `--keepalive <n>` | Hold the puck awake, resetting it after n seconds of quiet |
+| `--reset-procedure <n>` | Reset with that procedure number instead of the bare reboot |
 | `--no-handshake` | Wait for notifications without sending the start command |
 | `--log <path>` | Write the transcript to this exact file |
 | `--log-dir <path>` | Directory for `probe-<timestamp>.log` (default `~/Library/Logs/GearUp`) |
@@ -257,25 +258,38 @@ bridge, documents the same wall and its workaround is to pair the pucks in the
 official Zwift app for about three minutes before handing them over, which is
 the "opening Zwift first" that riders notice.
 
-**What holds the link is a periodic RESET, not a keep-alive ping.** BikeControl's
-own stub for its Click logic says it *"drives the periodic RESET recovery"*, and
-a command frame on this protocol is just `[opcode, ...payload]` — no header — so
-RESET is opcode 24 and the whole command is one byte, `0x18`, written to the same
-characteristic as the handshake. The puck answers a reset by stopping, so GearUp
-follows it half a second later with the same start command it uses to connect, and
-the cycle runs **every 40 seconds**: inside the 60-second window, and two writes a
-minute where a keep-alive ping cost twelve.
+**A reset is what puts the window back — and a reset is a reboot.** BikeControl's
+own stub for its Click logic says it *"drives the periodic RESET recovery"*, and a
+command frame on this protocol is just `[opcode, ...payload]` — no header — so
+RESET is opcode 24 and the whole command is one byte, `0x18`, on the same
+characteristic as the handshake. GearUp measured what that does: written at
+12:54:20.154, the puck was gone by .274 (*"The specified device has disconnected
+from us."*) and back when the retry asked for it. So a reset opens a fresh
+60-second window at the cost of a reboot, and the start command plus the reconnect
+put the session back.
+
+That is why GearUp spends it **only when it has to**, never on a clock of its own.
+The window belongs to the puck and a **press** opens a fresh one, so a rider who is
+shifting never needs a reset at all: while the puck is in use GearUp writes
+*nothing*. Only after 40 seconds of quiet — the spell that otherwise ends with the
+puck asleep and needing a press to come back — does the hold reset it, which costs
+about a second of link and starts the window again.
 
 Two writes were tried first and measured to do no good on their own. The bare
 `RideOn` header is answered — the puck echoes it — but does nothing about the
 sleep: one every 20 seconds, and the link still died 61 seconds after the last
-press. The documented Info-Request `00 08 00` (command 0 with an empty field) every
-5 seconds did not help either, though it does prove something useful: the puck
-answers it with its device info, which is how GearUp sees the serial number and a
-version string (`B.0` on the unit tested). What a fresh connection *did* do, every
-time, was give the puck a new 60-second window — which is the effect the reset
-cycle is built to buy without dropping the link. The Info-Request now rides along
-with each restart, since it is the documented answer to the puck's standby.
+press. The documented Info-Request `00 08 00` every 5 seconds did not help either.
+It is still worth spending once per connection, because what comes back is a
+`DevInfoPage`: the unit tested names itself `Zwift Click`, hardware `B.0`, firmware
+`1.2.0` — the release Zwift calls current — serial `0A-D4060F930E95` and protocol
+515. That is where the log's device info line comes from.
+
+Nothing in the published protocol switches the sleep off: the opcodes cover
+firmware, battery, the trainer and powering *off*, and the data objects the device
+info, the date and time, input config and the like. So GearUp does what BikeControl
+does — reboot the puck to open a fresh window — but only when the window is
+actually about to run out, which is why both bridges have to live with the sleep
+and only GearUp gets to stay quiet through a ride.
 
 GearUp holds the puck while, and only while, there is something to shift for: a
 client is connected, or the settings screen is waiting for a button. Holding it

@@ -506,7 +506,11 @@ public final class GearUpController: ObservableObject {
             log.add("Click V2 acknowledged the handshake (\(value.hexString)).", level: .success)
 
         case .deviceInfo(let value):
-            log.add("Click V2 device info: \(value.hexString)")
+            if let info = ZwiftDevInfoPage.decode(getResponse: value) {
+                log.add("Click V2 device info: \(info.summary).")
+            } else {
+                log.add("Click V2 device info: \(value.hexString)")
+            }
 
         case .empty:
             log.add("Click V2 sent an empty report.")
@@ -515,10 +519,11 @@ public final class GearUpController: ObservableObject {
             log.add("Click V2 reported a disconnect.", level: .warning)
 
         case .unknown(let type, let payload):
-            // The puck answers the keep-alive on the indicating characteristic.
-            // Those replies are not rider input, and identical ones collapse into
-            // a repeat count above, so a single quiet line shows it is still
-            // answering without turning every request into a warning.
+            // The puck answers on the indicating characteristic with things that
+            // are not rider input — its device info, and the `ff 05 …` the
+            // reference reads as "stopped" after a reset. Identical ones collapse
+            // into a repeat count above, so one quiet line each is enough, rather
+            // than a warning per reply.
             if ZwiftUUID.isCharacteristic(characteristic, ZwiftUUID.syncTxCharacteristic) {
                 log.add(String(format: "Click V2 answered (0x%02X): %@", type, payload.hexString))
             } else {

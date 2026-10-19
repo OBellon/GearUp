@@ -162,10 +162,25 @@ func runZwiftChecks(_ checks: Checks) {
     }
 
     checks.group("Click V2 keep-awake") {
-        // The mechanism is a reset, not a ping: the reference implementation's own
-        // Click logic "drives the periodic RESET recovery". A command frame on this
-        // protocol is [opcode, ...payload] with no header, so RESET (opcode 24) is
-        // a single byte on the same characteristic the handshake uses.
+        // The puck sleeps 60 seconds after the last press and comes back only on a
+        // button press, so the hold resets it during quiet spells: the window is
+        // the puck's own, and a press opens a fresh one.
+        checks.expect(
+            ClickCentral.defaultIdleResetThreshold < 60,
+            "a quiet puck is reset before its ~60 s sleep (\(Int(ClickCentral.defaultIdleResetThreshold)) s)"
+        )
+        checks.expect(
+            ClickCentral.defaultIdleResetThreshold >= 30,
+            "and not before it needs to be: while the rider is shifting, GearUp writes nothing"
+        )
+        checks.expect(
+            ClickCentral.watchInterval < ClickCentral.defaultIdleResetThreshold,
+            "the clock is looked at more often than the threshold it watches"
+        )
+
+        // A reset is a reboot, which is why the hold needs both the retry and the
+        // start command: measured, the link went 0.12 s after the reset and came
+        // back when the retry asked for it.
         checks.equal(
             ZwiftClickCodec.resetCommand,
             [0x18],
@@ -174,41 +189,54 @@ func runZwiftChecks(_ checks: Checks) {
         checks.equal(
             ClickCentral.resetCommand,
             ZwiftClickCodec.resetCommand,
-            "the keep-awake resets the puck with that command"
+            "the hold resets the puck with that command"
+        )
+        checks.equal(
+            ZwiftClickCodec.resetCommand(procedure: 1),
+            [0x18, 0x08, 0x01],
+            "a reset procedure is the same opcode with field 1"
+        )
+        checks.expect(
+            ClickCentral.restartDelay > 0 && ClickCentral.restartDelay < ClickCentral.watchInterval,
+            "the puck is started again \(ClickCentral.restartDelay) s after the reset, before the clock is next read"
+        )
+        checks.expect(
+            ClickCentral.reconnectInterval <= 1,
+            "a link that goes with the reset is back in about a second"
         )
 
-        // The puck sleeps 60 seconds after the last press, and a fresh connection
-        // opens the same window, so a cycle has to land well inside it.
-        checks.expect(
-            ClickCentral.defaultKeepAliveInterval < 60,
-            "the reset lands long before the puck's ~60 s link drop (\(Int(ClickCentral.defaultKeepAliveInterval)) s)"
-        )
-        checks.expect(
-            ClickCentral.defaultKeepAliveInterval >= 30,
-            "the reset is spaced out: holding the puck costs battery"
-        )
-        checks.expect(
-            ClickCentral.restartDelay > 0
-                && ClickCentral.restartDelay < ClickCentral.defaultKeepAliveInterval,
-            "the puck is started again \(ClickCentral.restartDelay) s after the reset, inside the cycle"
-        )
-        checks.expect(
-            ClickCentral.reconnectInterval < ClickCentral.defaultKeepAliveInterval,
-            "a dropped link is retried sooner than the next reset"
-        )
-
-        // The Info-Request rides along with the restart. It is the documented
-        // answer to the puck's standby, but it is not what holds the link: GearUp
-        // sent it every 5 s for a minute, the puck answered with its device info,
-        // and the link still died 61 s after the last press.
+        // The Info-Request is spent once per connection, for the device info it
+        // fetches — not as a keep-awake: sent every 5 s for a minute, the puck
+        // answered and the link still died 61 s after the last press.
         checks.equal(
             ZwiftClickCodec.infoRequest,
             [0x00, 0x08, 0x00],
-            "the info request is command 0 with an empty field"
+            "the info request is command 0 with data object id 0"
         )
+    }
+
+    checks.group("Click V2 device info") {
+        // The bytes the puck answered with on real hardware, so the decoder is
+        // pinned to what a Click V2 actually sends rather than to a tidy guess.
+        let payload: [UInt8] = [
+            0x08, 0x00, 0x12, 0x46, 0x0A, 0x44, 0x08, 0x83, 0x04, 0x12, 0x04, 0x00, 0x00,
+            0x02, 0x01, 0x1A, 0x0B, 0x5A, 0x77, 0x69, 0x66, 0x74, 0x20, 0x43, 0x6C, 0x69,
+            0x63, 0x6B, 0x32, 0x0F, 0x30, 0x41, 0x2D, 0x44, 0x34, 0x30, 0x36, 0x30, 0x46,
+            0x39, 0x33, 0x30, 0x45, 0x39, 0x35, 0x3A, 0x03, 0x42, 0x2E, 0x30, 0x42, 0x04,
+            0x08, 0x02, 0x10, 0x01, 0x48, 0x01, 0x50, 0x0A, 0x5A, 0x0C, 0x44, 0x34, 0x30,
+            0x36, 0x30, 0x46, 0x39, 0x33, 0x30, 0x45, 0x39, 0x35,
+        ]
+        let info = ZwiftDevInfoPage.decode(getResponse: payload)
+        checks.equal(info?.objectID, 0, "the answer is for data object 0, the device info")
+        checks.equal(info?.name, "Zwift Click", "the puck names itself")
+        checks.equal(info?.protocolVersion, 515, "the protocol version is 515")
+        checks.equal(info?.hardware, "B.0", "the hardware revision reads B.0")
+        checks.equal(info?.firmwareVersion, "1.2.0", "the firmware word reads 1.2.0")
+        checks.equal(info?.serial, "0A-D4060F930E95", "the serial number is carried whole")
+        checks.equal(info?.uid, "D4060F930E95", "so is the device uid")
         checks.expect(
-            ClickCentral.keepAliveHeartbeat > 1,
-            "the log heartbeats rather than printing every reset"
+            ZwiftDevInfoPage.decode(getResponse: [0x08, 0x00]) == nil,
+            "an answer with no page to it decodes as nothing rather than as empty strings"
         )
     }
 

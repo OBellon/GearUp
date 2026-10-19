@@ -304,6 +304,130 @@ public struct ClickKeyPadStatus: Equatable {
     }
 }
 
+/// The device info a controller answers an Info-Request with.
+///
+/// The answer arrives as `GET_RESPONSE` (opcode `0x3C`), a `GetResponse` whose
+/// `dataObjectData` holds the `DevInfoPage` of Zwift's protocol. On the Click V2
+/// measured here that page reads protocol 515, hardware `B.0`, firmware
+/// `00 00 02 01` and serial `0A-D4060F930E95`.
+public struct ZwiftDevInfoPage: Equatable {
+    /// The `dataObjectId` the device answered for. `0` is the device info.
+    public let objectID: UInt64
+    public let protocolVersion: Int?
+    public let firmware: [UInt8]
+    public let hardware: String?
+    public let name: String?
+    public let serial: String?
+    public let uid: String?
+
+    /// The firmware as the puck writes it.
+    ///
+    /// The components run low byte first and the last byte is padding, so the
+    /// measured `00 00 02 01` is 1.2.0 — which is the version Zwift calls current,
+    /// and so the unit here is up to date.
+    public var firmwareVersion: String? {
+        guard !firmware.isEmpty else { return nil }
+        var components = firmware.reversed().map(String.init)
+        while components.count > 3, components.last == "0" { components.removeLast() }
+        return components.joined(separator: ".")
+    }
+
+    public var summary: String {
+        var parts = [name ?? "Zwift controller"]
+        if let hardware { parts.append("hw \(hardware)") }
+        if let firmwareVersion { parts.append("fw \(firmwareVersion)") }
+        if let serial { parts.append("serial \(serial)") }
+        if let protocolVersion { parts.append("protocol \(protocolVersion)") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Decodes the payload of a `GET_RESPONSE` notification: the bytes that
+    /// follow the opcode.
+    public static func decode(getResponse payload: [UInt8]) -> ZwiftDevInfoPage? {
+        var reader = ProtoReader(payload)
+        var objectID: UInt64?
+        var data: [UInt8]?
+        while let key = reader.readKey() {
+            switch (key.field, key.wire) {
+            case (1, 0):
+                objectID = reader.readVarint()
+            case (2, 2):
+                data = reader.readLengthDelimited()
+            default:
+                guard reader.skip(wire: key.wire) else { return nil }
+            }
+        }
+        guard let objectID, let data else { return nil }
+
+        // The data object arrives wrapped: the real answer's `dataObjectData` is a
+        // single field-1 message holding the page (the reference parses those same
+        // bytes as the page directly, which does not line up with its own field
+        // numbers). Both shapes are tried, and only something that names the device
+        // or carries its serial counts, so a different data object decodes as
+        // nothing rather than as blanks.
+        for bytes in [unwrap(data), data] {
+            let page = decode(page: bytes, objectID: objectID)
+            if page.name != nil || page.serial != nil {
+                return page
+            }
+        }
+        return nil
+    }
+
+    /// The payload of a data object's first field, when that field is
+    /// length-delimited — the wrapper a data object usually arrives in.
+    private static func unwrap(_ data: [UInt8]) -> [UInt8] {
+        var reader = ProtoReader(data)
+        guard let key = reader.readKey(), key.wire == 2, let nested = reader.readLengthDelimited() else {
+            return data
+        }
+        return nested
+    }
+
+    private static func decode(page: [UInt8], objectID: UInt64) -> ZwiftDevInfoPage {
+        var reader = ProtoReader(page)
+        var protocolVersion: Int?
+        var firmware: [UInt8] = []
+        var hardware: String?
+        var name: String?
+        var serial: String?
+        var uid: String?
+
+        while let key = reader.readKey() {
+            switch (key.field, key.wire) {
+            case (1, 0):
+                protocolVersion = reader.readVarint().map(Int.init)
+            case (2, 2):
+                firmware = reader.readLengthDelimited() ?? []
+            case (3, 2):
+                name = reader.readLengthDelimited().map(text)
+            case (6, 2):
+                serial = reader.readLengthDelimited().map(text)
+            case (7, 2):
+                hardware = reader.readLengthDelimited().map(text)
+            case (11, 2):
+                uid = reader.readLengthDelimited().map(text)
+            default:
+                guard reader.skip(wire: key.wire) else { break }
+            }
+        }
+
+        return ZwiftDevInfoPage(
+            objectID: objectID,
+            protocolVersion: protocolVersion,
+            firmware: firmware,
+            hardware: hardware,
+            name: name,
+            serial: serial,
+            uid: uid
+        )
+    }
+
+    private static func text(_ bytes: [UInt8]) -> String {
+        String(decoding: bytes, as: UTF8.self)
+    }
+}
+
 /// Message type codes seen on the Zwift custom service.
 ///
 /// These are the `Opcode` values from Zwift's protocol. GearUp only needs the
@@ -359,23 +483,38 @@ public enum ZwiftClickCodec {
     /// Plain `"RideOn"`, used by older controllers.
     public static let rideOn: [UInt8] = Array("RideOn".utf8)
 
-    /// The RESET command: opcode 24 with no payload, so a single byte.
+    /// The RESET command: opcode 24, sent bare.
     ///
     /// A command frame on this protocol is `[opcode, ...payload]` with no header
-    /// — the reference implementation builds every one of them that way — which
-    /// makes RESET exactly `0x18`, written to the same characteristic as the
-    /// handshake. Its Click logic is the piece that "drives the periodic RESET
-    /// recovery", and that cycle is what stops a right puck dropping its link.
+    /// — the reference implementation builds every one of them that way — so
+    /// RESET is `0x18` on the same characteristic as the handshake.
+    ///
+    /// It is not a "stop the session": the puck **reboots** on it and drops the
+    /// link, which GearUp measured at 12:54:20.154 (reset written) → 12:54:20.274
+    /// ("The specified device has disconnected from us."). That reboot is what
+    /// the reference's "periodic RESET recovery" is, and why a reset has to be
+    /// followed by the start command the handshake uses.
     public static let resetCommand: [UInt8] = [0x18]
 
-    /// Command 0 with an empty field, written to the control point: the
-    /// Info-Request, to which the controller answers with its device info.
+    /// A reset carrying a procedure number: `Reset{resetProcedure: n}`.
+    ///
+    /// Opcode 24 with protobuf field 1. The reference's debug button sends the
+    /// field empty, and an empty field is what GearUp measured as a reboot; a
+    /// procedure may well be a softer reset, which is what the probe's
+    /// `--reset-procedure` is for.
+    public static func resetCommand(procedure: Int) -> [UInt8] {
+        [0x18, 0x08, UInt8(truncatingIfNeeded: procedure)]
+    }
+
+    /// Command 0 with the data object id 0: the Info-Request, to which the
+    /// controller answers with its device info.
     ///
     /// This is the documented answer to *standby*: a public ESP32 reader writes it
     /// every 5 s and warns that at 15 s "the Clicks go to sleep". It does not hold
     /// the link by itself — GearUp sent it every 5 s for a whole minute, watched
     /// the puck answer with its device info, and saw the link die 61 s after the
-    /// last press anyway.
+    /// last press anyway — so GearUp spends it once per connection instead, for
+    /// the firmware and serial the answer carries.
     public static let infoRequest: [UInt8] = [0x00, 0x08, 0x00]
 
     public static func decode(type: UInt8, payload: [UInt8]) -> ZwiftNotification {

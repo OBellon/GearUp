@@ -14,7 +14,8 @@ private struct ProbeOptions {
     var runSeconds: Double = 0
     var connectID: UUID?
     var reportAll = false
-    var keepAliveInterval: Double = 0
+    var idleResetThreshold: Double = 0
+    var resetProcedure: Int?
     var skipHandshake = false
     var logFile: URL?
     var logDirectory: URL
@@ -35,7 +36,8 @@ private struct ProbeOptions {
       --duration <n>     Stop n seconds after the handshake (default: run until Ctrl-C)
       --connect <uuid>   Connect to a specific peripheral identifier
       --all              List every Bluetooth device, not only Zwift ones
-      --keepalive <n>    Hold the puck awake, resetting and restarting it every n seconds (default: off)
+      --keepalive <n>    Hold the puck awake, resetting it after n seconds of quiet (default: off)
+      --reset-procedure <n>  Reset with that procedure number instead of the bare reboot
       --no-handshake     Do not send the Click V2 start command
       --log <path>       Write the transcript to this exact file
       --log-dir <path>   Directory for probe-<timestamp>.log (default: ~/Library/Logs/GearUp)
@@ -77,7 +79,11 @@ private struct ProbeOptions {
                 }
             case "--keepalive":
                 if let raw = value(after: argument), let seconds = Double(raw) {
-                    options.keepAliveInterval = seconds
+                    options.idleResetThreshold = seconds
+                }
+            case "--reset-procedure":
+                if let raw = value(after: argument), let procedure = Int(raw) {
+                    options.resetProcedure = procedure
                 }
             case "--connect":
                 if let raw = value(after: argument) {
@@ -198,11 +204,15 @@ func scheduleAutoStop() {
 
 let central = ClickCentral()
 central.reportAllDevices = options.reportAll
-// The probe's `--keepalive` now drives the same hold the app uses, so a probe
-// run measures the real mechanism rather than a copy of it.
-central.keepsPuckAwake = options.keepAliveInterval > 0
-if options.keepAliveInterval > 0 {
-    central.keepAliveInterval = options.keepAliveInterval
+// The probe's `--keepalive` drives the same hold the app uses, so a probe run
+// measures the real mechanism rather than a copy of it: `n` is how long the puck
+// may sit quiet before it gets a reset.
+central.keepsPuckAwake = options.idleResetThreshold > 0
+if options.idleResetThreshold > 0 {
+    central.idleResetThreshold = options.idleResetThreshold
+}
+if let procedure = options.resetProcedure {
+    central.resetPayload = ZwiftClickCodec.resetCommand(procedure: procedure)
 }
 
 central.onEvent = { event in
