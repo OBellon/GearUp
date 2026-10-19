@@ -378,7 +378,8 @@ connection, while the level never left 90% once. Read as a countdown, those numb
 would mean the puck was flat within two hours of that reading — and it went on
 answering. Two hours later, after a morning of resets, the same field read **2844**:
 seventy-one minutes *higher* than the last of them, with the level still at 90%.
-A countdown cannot rise. A forecast of the moment's drain can, and does. So the log now quotes anything above an hour in whole hours, where 2773
+A countdown cannot rise. A forecast of the moment's drain can, and does: it read
+2820 an hour later still, with the level still at 90%. So the log now quotes anything above an hour in whole hours, where 2773
 is "about 46 h" and does not read like a stopwatch. Zwift's own figure for the same
 puck is **over 100 hours** on a CR2032, so an hour's ride is worth about a percent,
 and the expensive case is a stress test that reconnects it every minute for an
@@ -433,6 +434,16 @@ exactly as a press does on an awake link, with the pipe plainly working. The
 press that woke it was not reported. The same run's first connection shows the
 same thing from the other side, where the mashing that woke the puck produced no
 button reports at all before the link dropped.
+
+A second run the same afternoon closed the loop with the sleep now named in the
+log. Last press 15:48:28.250; *"Disconnected: the puck's own sleep"* at 15:49:29.252
+— 61.0 seconds later, and the puck then advertised nothing for another 15.8 s,
+which is how long it took for a press to wake it. The retry connected at
+15:49:45.054, the subscriptions and handshake completed, and the puck then said
+**nothing for 4.6 seconds** — not a state report, not a press. The next press, at
+15:49:49.642, arrived with its full press-and-release pair. The wake-up press was
+seen to vanish and the one after it to shift, which is the whole trade in one
+transcript.
 
 So the shift that has to wake a sleeping controller is the one the sleep costs,
 and the reset buys exactly that back. The price of the hold is one reboot per
