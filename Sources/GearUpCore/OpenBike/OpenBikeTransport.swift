@@ -144,11 +144,11 @@ public extension OpenBikeTransport {
         send([OpenBikeButtonState(button, value: 0x00)])
     }
 
-    func sendTap(for action: ShiftAction) {
+    func sendTap(for action: ButtonAction) {
         switch action {
         case .shiftUp: sendTap(.shiftUp)
         case .shiftDown: sendTap(.shiftDown)
-        case .none: break
+        default: break // Everything else happens on this Mac.
         }
     }
 }

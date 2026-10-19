@@ -62,8 +62,8 @@ struct MenuBarContent: View {
 
         Divider()
 
-        Button("Shift Up") { controller.sendTestShift(.shiftUp) }
-        Button("Shift Down") { controller.sendTestShift(.shiftDown) }
+        Button("Shift Up") { controller.sendTestAction(.shiftUp) }
+        Button("Shift Down") { controller.sendTestAction(.shiftDown) }
 
         Divider()
 

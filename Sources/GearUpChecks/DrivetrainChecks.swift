@@ -34,8 +34,7 @@ func runDrivetrainChecks(_ checks: Checks) {
         reset.reset(to: 4)
         checks.equal(reset.currentGear, 4, "the gear can be reset")
 
-        checks.equal(ShiftAction.shiftUp.title, "Shift Up", "shift up title")
-        checks.equal(ShiftAction.shiftDown.title, "Shift Down", "shift down title")
-        checks.equal(ShiftAction.none.title, "Unassigned", "unassigned title")
+        checks.equal(ButtonAction.shiftUp.title, "Shift Up", "shift up title")
+        checks.equal(ButtonAction.shiftDown.title, "Shift Down", "shift down title")
     }
 }

@@ -176,9 +176,9 @@ public final class ClickCentral: NSObject {
     /// a fresh window, so a rider who is shifting never reaches the threshold and
     /// GearUp writes nothing at all while the puck is in use.
     ///
-    /// Holding costs battery, so `GearUpController` turns this on only while
-    /// there is something to shift for: a client is connected, or the settings
-    /// screen is waiting for a button.
+    /// Holding costs battery, so `GearUpController` turns this on only while a
+    /// press has somewhere to go: a client is connected, or the settings screen
+    /// is waiting for a button.
     public var keepsPuckAwake = false {
         didSet {
             guard keepsPuckAwake != oldValue else { return }

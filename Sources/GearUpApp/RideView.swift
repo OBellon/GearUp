@@ -72,13 +72,13 @@ struct RideView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button {
-                        controller.sendTestShift(.shiftUp)
+                        controller.sendTestAction(.shiftUp)
                     } label: {
                         Label("Shift Up", systemImage: "chevron.up")
                             .frame(maxWidth: .infinity)
                     }
                     Button {
-                        controller.sendTestShift(.shiftDown)
+                        controller.sendTestAction(.shiftDown)
                     } label: {
                         Label("Shift Down", systemImage: "chevron.down")
                             .frame(maxWidth: .infinity)
@@ -113,14 +113,12 @@ struct RideView: View {
 
             Divider()
 
-            DetailRow(
-                label: "Shift up",
-                value: "\(controller.settings.shiftUpButton.displayName)  \(controller.settings.shiftUpButton.maskHex)"
-            )
-            DetailRow(
-                label: "Shift down",
-                value: "\(controller.settings.shiftDownButton.displayName)  \(controller.settings.shiftDownButton.maskHex)"
-            )
+            ForEach(controller.settings.buttonMap.all) { assignment in
+                DetailRow(
+                    label: assignment.action.title,
+                    value: "\(assignment.button.displayName)  \(assignment.button.maskHex)"
+                )
+            }
             DetailRow(
                 label: "Last press",
                 value: controller.pressedButtons.isEmpty

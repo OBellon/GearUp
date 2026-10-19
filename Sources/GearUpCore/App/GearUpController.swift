@@ -65,7 +65,8 @@ public struct ClickStatus: Equatable {
 
 /// Ties the whole bridge together:
 ///
-///     Zwift Click V2 ──BLE──▶ ShiftRouter ──▶ OpenBikeControl ──▶ MyWhoosh
+///     Zwift Click V2 ──BLE──▶ ButtonRouter ──▶ OpenBikeControl ──▶ MyWhoosh
+///                                            └─▶ the Mac (volume, desktops)
 ///
 /// The Click V2 is the only thing GearUp reads, and the trainer app is the only
 /// thing it talks to. GearUp never connects to the trainer, because MyWhoosh
@@ -82,12 +83,16 @@ public final class GearUpController: ObservableObject {
     @Published public private(set) var gear: Drivetrain
     @Published public private(set) var transports: [TransportState] = []
     @Published public private(set) var pressedButtons: Set<RideButtonMask> = []
-    @Published public private(set) var lastShiftAction: ShiftAction?
+    @Published public private(set) var lastShiftAction: ButtonAction?
     @Published public private(set) var shiftCount = 0
+
+    /// Whether the app currently holds the Accessibility grant that changing
+    /// desktops needs. Published so the settings screen can say so.
+    @Published public private(set) var hasAccessibility = MacControl.hasAccessibility
 
     /// The action waiting for the rider to press a button on the puck, or `nil`
     /// when no assignment is in progress.
-    @Published public private(set) var learningAction: ShiftAction?
+    @Published public private(set) var learningAction: ButtonAction?
 
     /// The most recent settings change is written straight through to disk.
     ///
@@ -109,9 +114,7 @@ public final class GearUpController: ObservableObject {
             store.save(settings)
             if settings.buttonMap != oldValue.buttonMap {
                 router.buttonMap = settings.buttonMap
-                log.add(
-                    "Button map: \(settings.shiftUpButton.displayName) shifts up, \(settings.shiftDownButton.displayName) shifts down."
-                )
+                log.add("Button map: \(buttonMapSummary).")
             }
             if settings.gearCount != oldValue.gearCount {
                 gear.setGearCount(settings.gearCount)
@@ -141,7 +144,7 @@ public final class GearUpController: ObservableObject {
 
     private let store: SettingsStore
     private let clickCentral = ClickCentral()
-    private let router: ShiftRouter
+    private let router: ButtonRouter
     private let bluetoothPeripheral = OpenBikePeripheral()
     private let networkServer = OpenBikeNetworkServer()
 
@@ -174,9 +177,13 @@ public final class GearUpController: ObservableObject {
         let settings = store.load()
         self.settings = settings
         self.gear = Drivetrain(gearCount: settings.gearCount, currentGear: settings.startingGear)
-        self.router = ShiftRouter(buttonMap: settings.buttonMap)
+        self.router = ButtonRouter(buttonMap: settings.buttonMap)
 
-        router.onShift = { [weak self] action, _ in
+        // The switcher has to be watching before the first press to know where
+        // the rider came from, so it starts with the app rather than on demand.
+        RideAppSwitcher.shared.start()
+
+        router.onAction = { [weak self] action, _ in
             self?.perform(action)
         }
         router.onButtonChange = { [weak self] button, isPressed in
@@ -201,7 +208,7 @@ public final class GearUpController: ObservableObject {
             TransportState(kind: .network, status: networkServer.status),
         ]
 
-        log.add("GearUp ready. Button map: \(settings.shiftUpButton.displayName) shifts up, \(settings.shiftDownButton.displayName) shifts down.")
+        log.add("GearUp ready. Button map: \(buttonMapSummary).")
         log.add("Readout: \(gear.gearCount) gears, starting at \(gear.currentGear).")
         log.add("Looking for a Zwift Click V2 (right puck).", level: .info)
     }
@@ -234,22 +241,33 @@ public final class GearUpController: ObservableObject {
         isRunning ? stop() : start()
     }
 
-    // MARK: - Shifting
+    // MARK: - Buttons
 
-    /// Sends a shift without the puck, so the rider can check the connection to
-    /// MyWhoosh before touching the bike.
-    public func sendTestShift(_ action: ShiftAction) {
+    /// Runs an action without the puck, so the rider can check it before
+    /// touching the bike: a shift against MyWhoosh, a Mac action against the Mac.
+    public func sendTestAction(_ action: ButtonAction) {
         log.add("Sending a test \(action.title.lowercased()).")
         perform(action)
     }
 
-    private func perform(_ action: ShiftAction) {
-        guard action != .none else { return }
+    private func perform(_ action: ButtonAction) {
+        // Mac actions never touch the gear and need no transport: a volume press
+        // while MyWhoosh is closed should still change the volume.
+        guard action.isShift else {
+            // The grant can change while GearUp is running, so the settings
+            // screen's answer is refreshed from the source each time a button
+            // asks about it.
+            refreshAccessibility()
+            if let note = MacControl.perform(action) {
+                log.add("\(action.title): \(note)")
+            }
+            return
+        }
 
         switch action {
         case .shiftUp: gear.shiftUp()
         case .shiftDown: gear.shiftDown()
-        case .none: return
+        default: return
         }
 
         lastShiftAction = action
@@ -276,10 +294,10 @@ public final class GearUpController: ObservableObject {
     /// Waits for the next button pressed on the puck and gives it to an action.
     ///
     /// While this is running the router keeps reporting presses — so the screen
-    /// still shows the puck being read — but stops emitting shifts, which is why
-    /// the gear cannot move while a button is being reassigned.
-    public func learnButton(for action: ShiftAction) {
-        guard action != .none else { return }
+    /// still shows the puck being read — but stops emitting actions, which is why
+    /// the gear cannot move and the volume cannot jump while a button is being
+    /// reassigned.
+    public func learnButton(for action: ButtonAction) {
         learningAction = action
         router.isCapturingButtons = true
         // Holding the puck now matters: a capture that waits on a puck which
@@ -297,9 +315,32 @@ public final class GearUpController: ObservableObject {
         log.add("Button assignment cancelled.")
     }
 
-    /// Points a puck button at a shifting action, from the settings screen.
-    public func assign(_ button: RideButtonMask, to action: ShiftAction) {
-        settings.assign(button, to: action)
+    /// Points a puck button at an action, from the settings screen. `nil` takes
+    /// the action off whatever button carries it, which is what "None" means.
+    public func assign(_ button: RideButtonMask?, to action: ButtonAction) {
+        guard let button else {
+            guard let current = settings.button(for: action) else { return }
+            settings.assign(current, to: nil)
+            return
+        }
+        if settings.assign(button, to: action) != .unchanged {
+            askForAccessibilityIfNeeded(for: action)
+        }
+    }
+
+    /// Whether a desktop action needs the Accessibility grant, and the one-off
+    /// prompt for it. Binding such a button is the calm moment to ask: the rider
+    /// is in the settings screen, not mid-ride.
+    public func askForAccessibilityIfNeeded(for action: ButtonAction) {
+        guard action == .nextSpace || action == .previousSpace else { return }
+        MacControl.askForAccessibilityOnce()
+        refreshAccessibility()
+    }
+
+    /// Re-reads the grant, so the settings screen can say whether it is in place.
+    public func refreshAccessibility() {
+        let granted = MacControl.hasAccessibility
+        if granted != hasAccessibility { hasAccessibility = granted }
     }
 
     /// Puts the button map back to the shipped `+` and `B`.
@@ -307,15 +348,23 @@ public final class GearUpController: ObservableObject {
         settings.restoreDefaultButtonMap()
     }
 
-    private func learn(_ button: RideButtonMask, for action: ShiftAction) {
+    private func learn(_ button: RideButtonMask, for action: ButtonAction) {
         learningAction = nil
         router.isCapturingButtons = false
         // A real change is logged by the settings observer, which prints the
         // resulting map; only a press that changed nothing needs a word here.
         if settings.assign(button, to: action) == .unchanged {
             log.add("\(button.displayName) is already assigned to \(action.title).")
+        } else {
+            askForAccessibilityIfNeeded(for: action)
         }
         updatePuckPolicy()
+    }
+
+    /// The map in one line: `+ Shift Up, B Shift Down`.
+    private var buttonMapSummary: String {
+        let parts = settings.buttonMap.all.map { "\($0.button.displayName) \($0.action.title)" }
+        return parts.isEmpty ? "nothing assigned" : parts.joined(separator: ", ")
     }
 
     // MARK: - Transports
@@ -359,9 +408,9 @@ public final class GearUpController: ObservableObject {
         guard wanted != clickCentral.keepsPuckAwake else { return }
         clickCentral.keepsPuckAwake = wanted
         if wanted {
-            log.add("Holding the puck awake: there is something to shift for.")
+            log.add("Holding the puck awake: presses have somewhere to go.")
         } else {
-            log.add("Letting the puck sleep: nothing is connected to shift for.")
+            log.add("Letting the puck sleep: no ride is listening and no capture is waiting.")
         }
     }
 

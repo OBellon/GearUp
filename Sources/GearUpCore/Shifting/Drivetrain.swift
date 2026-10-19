@@ -56,18 +56,3 @@ public struct Drivetrain: Equatable {
     }
 }
 
-/// Semantic actions GearUp can emit. Kept separate from the OpenBikeControl
-/// button IDs so the mapping layer stays explicit.
-public enum ShiftAction: String, CaseIterable {
-    case shiftUp
-    case shiftDown
-    case none
-
-    public var title: String {
-        switch self {
-        case .shiftUp: return "Shift Up"
-        case .shiftDown: return "Shift Down"
-        case .none: return "Unassigned"
-        }
-    }
-}

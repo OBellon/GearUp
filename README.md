@@ -121,9 +121,43 @@ MyWhoosh card), **Diagnostics** (the live event log) and **Settings**.
 Settings holds the gear range, the button map and the transport switch. For the
 button map you can pick a button from the list or press **Press…** and then the
 button on the puck itself — the app waits for a press and assigns it. Giving an
-action a button that already does the other one swaps the two, so the map is
-never left with both actions on one button. Nothing shifts while the app is
-waiting for that press.
+action a button that already has one moves it there and swaps the two over when
+that button had a job of its own, so the map is never left with two actions on
+one button. Nothing runs while the app is waiting for that press.
+
+### What the buttons can do
+
+The two shifts go to MyWhoosh over OpenBikeControl. Everything else happens on
+this Mac, so `Y`, `Z` and `A` — the three the puck ships with unassigned — can be
+given a real job:
+
+| Action | What it does | Cost |
+| --- | --- | --- |
+| Shift Up / Shift Down | Sent to MyWhoosh as an OpenBikeControl press | — |
+| Volume Up / Volume Down | The Mac's output volume, one sixteenth a press | none |
+| Mute | Toggles the output mute | none |
+| Next / Previous Desktop | Posts Ctrl+→ / Ctrl+← to Mission Control | Accessibility, once |
+| MyWhoosh ⇄ Last App | Activates MyWhoosh, or the app you were in before it | none |
+
+The desktop pair is the only part that needs a permission: macOS has no public
+"go to the next Space" API — Mission Control is driven by a key combination — so
+GearUp posts one, and posting keys is what Accessibility permission gates. Grant
+it from the settings screen (or System Settings → Privacy & Security →
+Accessibility) and it sticks, because the bundle is signed with GearUp's own
+identity. Two things worth knowing:
+
+* Spaces do not wrap. Ctrl+→ on the last desktop does nothing, so a single button
+  cannot cycle back around; a second button on Previous Desktop can.
+* **MyWhoosh ⇄ Last App** needs no permission at all and does what a rider
+  usually wants: press it to leave the ride, press it again to come back. It
+  switches apps rather than desktops, and macOS brings the window's desktop with
+  it.
+
+Outside a ride GearUp is frugal on purpose: with no MyWhoosh connected and no
+capture waiting, the puck is let go and falls asleep after a few minutes (see
+*The puck sleeps after a minute*). A button press then wakes it but is itself
+lost — the shift or the volume change lands on the next press. During a ride
+MyWhoosh is connected, so the puck is held awake and every press lands.
 
 Everything is logged twice: to the Diagnostics tab and to
 
@@ -398,7 +432,7 @@ does — reboot the puck to open a fresh window — but only when the window is
 actually about to run out, which is why both bridges have to live with the sleep
 and only GearUp gets to stay quiet through a ride.
 
-GearUp holds the puck while, and only while, there is something to shift for: a
+GearUp holds the puck while, and only while, a press has somewhere to go: a
 client is connected, or the settings screen is waiting for a button. Holding it
 costs battery, and holding it for nothing spends a coin cell on a controller
 nobody is using, so the rest of the time the puck is left alone to power down on

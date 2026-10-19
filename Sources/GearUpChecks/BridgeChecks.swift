@@ -14,12 +14,12 @@ func runShiftRouterChecks(_ checks: Checks) {
 
     /// Records everything a router reports.
     final class Recorder {
-        var shifts: [ShiftAction] = []
+        var actions: [ButtonAction] = []
         var edges: [(RideButtonMask, Bool)] = []
         var repeats = 0
 
-        func attach(to router: ShiftRouter) {
-            router.onShift = { [weak self] action, _ in self?.shifts.append(action) }
+        func attach(to router: ButtonRouter) {
+            router.onAction = { [weak self] action, _ in self?.actions.append(action) }
             router.onButtonChange = { [weak self] button, pressed in self?.edges.append((button, pressed)) }
             router.onRepeatedReport = { [weak self] in self?.repeats += 1 }
         }
@@ -42,23 +42,25 @@ func runShiftRouterChecks(_ checks: Checks) {
 
     checks.group("Button map") {
         let map = ButtonMap.default
-        checks.equal(map.shiftUp, .shiftUpRight, "the + button shifts up by default")
-        checks.equal(map.shiftDown, .b, "the B button shifts down by default")
+        checks.equal(map.button(for: .shiftUp), .shiftUpRight, "the + button shifts up by default")
+        checks.equal(map.button(for: .shiftDown), .b, "the B button shifts down by default")
         checks.equal(map.action(for: .shiftUpRight), .shiftUp, "+ maps to shift up")
         checks.equal(map.action(for: .b), .shiftDown, "B maps to shift down")
-        checks.equal(map.action(for: .y), .none, "Y is unassigned")
-        checks.equal(map.action(for: .z), .none, "Z is unassigned")
-        checks.equal(map.action(for: .a), .none, "A is unassigned")
+        checks.isNil(map.action(for: .y), "Y is unassigned")
+        checks.isNil(map.action(for: .z), "Z is unassigned")
+        checks.isNil(map.action(for: .a), "A is unassigned")
 
-        let swapped = ButtonMap(shiftUp: .y, shiftDown: .z)
-        checks.equal(swapped.action(for: .y), .shiftUp, "a remapped Y shifts up")
-        checks.equal(swapped.action(for: .z), .shiftDown, "a remapped Z shifts down")
-        checks.equal(swapped.action(for: .shiftUpRight), .none, "the old + assignment is gone")
-        checks.equal(swapped.assignments.count, 2, "two assignments are listed")
+        let remapped = ButtonMap(assignments: [.y: .shiftUp, .z: .shiftDown])
+        checks.equal(remapped.action(for: .y), .shiftUp, "a remapped Y shifts up")
+        checks.equal(remapped.action(for: .z), .shiftDown, "a remapped Z shifts down")
+        checks.isNil(remapped.action(for: .shiftUpRight), "the old + assignment is gone")
+        checks.equal(remapped.assignments.count, 2, "two assignments are listed")
 
-        let doubled = ButtonMap(shiftUp: .b, shiftDown: .b)
-        checks.equal(doubled.button(for: .shiftDown), nil, "one button cannot do both actions")
-        checks.equal(doubled.assignments.count, 1, "a doubled assignment is listed once")
+        // Two buttons claiming one action, e.g. a hand-edited blob: the first in
+        // puck order keeps it and the map stays a bijection.
+        let doubled = ButtonMap(assignments: [.b: .shiftUp, .a: .shiftUp])
+        checks.equal(doubled.button(for: .shiftUp), .a, "a repeated action keeps the first button in puck order")
+        checks.equal(doubled.assignments.count, 1, "a doubled action is listed once")
 
         checks.equal(
             RideButtonMask.clickV2RightPuck,
@@ -72,25 +74,57 @@ func runShiftRouterChecks(_ checks: Checks) {
         )
     }
 
+    checks.group("Button actions") {
+        checks.equal(ButtonAction.allCases.count, 8, "there are eight things a button can do")
+        checks.equal(
+            ButtonAction.allCases.filter(\.isShift),
+            [.shiftUp, .shiftDown],
+            "only the two shifts travel to MyWhoosh"
+        )
+        checks.equal(ButtonAction.volumeUp.title, "Volume Up", "the volume-up title")
+        checks.equal(ButtonAction.nextSpace.title, "Next Desktop", "the next-desktop title")
+        checks.equal(ButtonAction.toggleRideApp.title, "MyWhoosh ⇄ Last App", "the ride-app title")
+        checks.expect(
+            ButtonAction.allCases.allSatisfy { !$0.title.isEmpty },
+            "every action has a title for the settings screen"
+        )
+        checks.expect(
+            ButtonAction.allCases.filter { !$0.isShift }.allSatisfy { $0.detail != nil },
+            "every Mac action explains itself in the settings screen"
+        )
+    }
+
     checks.group("Button map assignment") {
         var map = ButtonMap.default
         checks.equal(map.assign(.y, to: .shiftUp), .assigned, "a free button is assigned")
-        checks.equal(map.shiftUp, .y, "the new button shifts up")
-        checks.equal(map.shiftDown, .b, "the other action is left alone")
+        checks.equal(map.button(for: .shiftUp), .y, "the new button shifts up")
+        checks.equal(map.button(for: .shiftDown), .b, "the other action is left alone")
+        checks.isNil(map.action(for: .shiftUpRight), "the button it moved off is freed")
         checks.equal(map.assign(.y, to: .shiftUp), .unchanged, "re-assigning the same button changes nothing")
 
-        // A button that already drives the other action swaps over, so the map
-        // can never be left with both actions on one button.
+        // A button that already drives another action swaps over, so the map can
+        // never be left with two actions on one button or a button doing two.
         checks.equal(map.assign(.b, to: .shiftUp), .swapped(freed: .y), "a button in use swaps over")
-        checks.equal(map.shiftUp, .b, "the button now shifts up")
-        checks.equal(map.shiftDown, .y, "and the freed button takes the other action")
+        checks.equal(map.button(for: .shiftUp), .b, "the button now shifts up")
+        checks.equal(map.button(for: .shiftDown), .y, "and the freed button takes the other action")
         checks.equal(map.action(for: .b), .shiftUp, "the map agrees for the new button")
         checks.equal(map.action(for: .y), .shiftDown, "the map agrees for the swapped button")
-        checks.equal(map.assign(.z, to: .none), .unchanged, "no action cannot be assigned to")
+
+        // A Mac action can take over a button that shifts, and the shift it
+        // displaced is gone rather than remembered somewhere.
+        checks.equal(map.assign(.y, to: .volumeUp), .assigned, "a Mac action can take a shift button")
+        checks.equal(map.action(for: .y), .volumeUp, "the button changes the volume now")
+        checks.isNil(map.button(for: .shiftDown), "and it no longer shifts down")
+
+        checks.equal(map.assign(.y, to: nil), .cleared, "an action can be taken away")
+        checks.isNil(map.action(for: .y), "a cleared button does nothing")
+        checks.equal(map.assign(.y, to: nil), .unchanged, "clearing an unassigned button changes nothing")
 
         var settings = GearUpSettings.default
         settings.assign(.z, to: .shiftDown)
-        checks.equal(settings.shiftDownButton, .z, "the settings take the new button")
+        checks.equal(settings.button(for: .shiftDown), .z, "the settings take the new button")
+        checks.isNil(settings.buttonMap.action(for: .b), "the button it was on is freed")
+        checks.equal(settings.button(for: .shiftUp), .shiftUpRight, "the other action stays put")
         checks.equal(settings.buttonMap.action(for: .z), .shiftDown, "the derived map agrees")
         settings.restoreDefaultButtonMap()
         checks.equal(settings.buttonMap, .default, "the shipped map can be restored")
@@ -98,7 +132,7 @@ func runShiftRouterChecks(_ checks: Checks) {
 
     checks.group("Button capture") {
         let clock = Clock()
-        let router = ShiftRouter(now: { clock.now })
+        let router = ButtonRouter(now: { clock.now })
         let recorder = Recorder()
         recorder.attach(to: router)
 
@@ -107,7 +141,7 @@ func runShiftRouterChecks(_ checks: Checks) {
         clock.advance(0.3)
         router.handle(status(released))
 
-        checks.equal(recorder.shifts, [], "capturing a button sends no shift")
+        checks.equal(recorder.actions, [], "capturing a button runs no action")
         checks.equal(recorder.edges.map(\.0), [.shiftUpRight, .shiftUpRight], "the press and release are still reported")
         checks.equal(recorder.edges.map(\.1), [true, false], "with the press first")
 
@@ -115,12 +149,12 @@ func runShiftRouterChecks(_ checks: Checks) {
         clock.advance(0.3)
         router.handle(status(plusPress))
 
-        checks.equal(recorder.shifts, [.shiftUp], "shifting works again once capture stops")
+        checks.equal(recorder.actions, [.shiftUp], "shifting works again once capture stops")
     }
 
     checks.group("Shift router edges") {
         let clock = Clock()
-        let router = ShiftRouter(now: { clock.now })
+        let router = ButtonRouter(now: { clock.now })
         let recorder = Recorder()
         recorder.attach(to: router)
 
@@ -132,7 +166,7 @@ func runShiftRouterChecks(_ checks: Checks) {
         clock.advance(0.12)
         router.handle(status(released))
 
-        checks.equal(recorder.shifts, [.shiftUp], "a tap on + shifts up exactly once")
+        checks.equal(recorder.actions, [.shiftUp], "a tap on + shifts up exactly once")
         checks.equal(recorder.edges.count, 2, "the tap is one press and one release edge")
         checks.equal(recorder.repeats, 1, "the repeated pressed report is counted, not acted on")
 
@@ -142,7 +176,7 @@ func runShiftRouterChecks(_ checks: Checks) {
             router.handle(status(released))
         }
 
-        checks.equal(recorder.shifts, [.shiftUp], "the release flood adds no shifts")
+        checks.equal(recorder.actions, [.shiftUp], "the release flood adds no shifts")
         checks.equal(router.heldButtons, [], "nothing is held after the release")
 
         // Two taps in a row are two shifts.
@@ -150,13 +184,13 @@ func runShiftRouterChecks(_ checks: Checks) {
         router.handle(status(bPress))
         clock.advance(0.2)
         router.handle(status(released))
-        checks.equal(recorder.shifts, [.shiftUp, .shiftDown], "B shifts down")
+        checks.equal(recorder.actions, [.shiftUp, .shiftDown], "B shifts down")
     }
 
     checks.group("Shift router reads the real bits") {
-        func actions(for bytes: [UInt8]) -> [ShiftAction] {
+        func actions(for bytes: [UInt8]) -> [ButtonAction] {
             let clock = Clock()
-            let router = ShiftRouter(now: { clock.now })
+            let router = ButtonRouter(now: { clock.now })
             return router.handle(status(bytes))
         }
 
@@ -170,7 +204,7 @@ func runShiftRouterChecks(_ checks: Checks) {
 
     checks.group("Shift router recovery") {
         let clock = Clock()
-        let router = ShiftRouter(now: { clock.now })
+        let router = ButtonRouter(now: { clock.now })
         let recorder = Recorder()
         recorder.attach(to: router)
 
@@ -180,11 +214,11 @@ func runShiftRouterChecks(_ checks: Checks) {
         router.handle(status(plusPress))
         clock.advance(0.9)
         router.handle(status(plusPress))
-        checks.equal(recorder.shifts, [.shiftUp], "a repeat inside the window is still ignored")
+        checks.equal(recorder.actions, [.shiftUp], "a repeat inside the window is still ignored")
 
         clock.advance(1.6)
         router.handle(status(plusPress))
-        checks.equal(recorder.shifts, [.shiftUp, .shiftUp], "a repeat after the window counts as a new press")
+        checks.equal(recorder.actions, [.shiftUp, .shiftUp], "a repeat after the window counts as a new press")
 
         router.reset()
         checks.equal(router.heldButtons, [], "reset clears the held state")
@@ -192,7 +226,7 @@ func runShiftRouterChecks(_ checks: Checks) {
 
     checks.group("Shift router unassigned buttons") {
         let clock = Clock()
-        let router = ShiftRouter(now: { clock.now })
+        let router = ButtonRouter(now: { clock.now })
         let recorder = Recorder()
         recorder.attach(to: router)
 
@@ -200,10 +234,20 @@ func runShiftRouterChecks(_ checks: Checks) {
         clock.advance(0.3)
         router.handle(status(released))
 
-        checks.equal(recorder.shifts, [], "Z produces no shift")
+        checks.equal(recorder.actions, [], "Z produces no action")
         checks.equal(recorder.edges.count, 2, "Z is still reported as a press and release")
         checks.equal(recorder.edges.first?.0, .z, "the reported button is Z")
         checks.equal(recorder.edges.first?.1, true, "the first edge is a press")
+    }
+
+    checks.group("Mac action arithmetic") {
+        // The one piece of the Mac actions that can be checked without a Mac's
+        // audio device in the loop: the volume step and its clamps.
+        checks.equal(MacControl.volumeStep, 0.0625, "a volume press is one sixteenth, like the volume keys")
+        checks.equal(MacControl.steppedVolume(from: 0.5, by: MacControl.volumeStep), 0.5625, "up moves by one step")
+        checks.equal(MacControl.steppedVolume(from: 0.5, by: -MacControl.volumeStep), 0.4375, "down moves by one step")
+        checks.equal(MacControl.steppedVolume(from: 0.98, by: MacControl.volumeStep), 1, "the top is clamped")
+        checks.equal(MacControl.steppedVolume(from: 0.02, by: -MacControl.volumeStep), 0, "the bottom is clamped")
     }
 }
 
@@ -216,9 +260,11 @@ func runSettingsChecks(_ checks: Checks) {
         checks.equal(settings.startingGear, 15, "the default starting gear is 15")
         checks.equal(settings.transportMode, .both, "both transports are offered by default")
         checks.equal(settings.showInMenuBar, true, "the menu bar extra is on by default")
-        checks.equal(settings.shiftUpButton, .shiftUpRight, "the default shift-up button is +")
-        checks.equal(settings.shiftDownButton, .b, "the default shift-down button is B")
-        checks.equal(settings.buttonMap.shiftUp, .shiftUpRight, "the button map comes from the settings")
+        checks.equal(settings.button(for: .shiftUp), .shiftUpRight, "the default shift-up button is +")
+        checks.equal(settings.button(for: .shiftDown), .b, "the default shift-down button is B")
+        checks.isNil(settings.button(for: .volumeUp), "the volume buttons start unassigned")
+        checks.equal(settings.usesDesktopSwitching, false, "changing desktops is off until a button asks for it")
+        checks.equal(settings.buttonMap, .default, "the button map comes from the settings")
     }
 
     checks.group("Settings clamping") {
@@ -249,12 +295,15 @@ func runSettingsChecks(_ checks: Checks) {
         settings.gearCount = 24
         settings.transportMode = .network
         settings.showInMenuBar = false
-        settings.shiftUpButton = .y
+        settings.assign(.y, to: .shiftUp)
+        settings.assign(.z, to: .volumeUp)
         store.save(settings)
 
         let reloaded = SettingsStore(defaults: defaults).load()
         checks.equal(reloaded, settings, "settings survive a round trip through UserDefaults")
-        checks.equal(reloaded.shiftUpButton, .y, "a remapped shift-up button survives")
+        checks.equal(reloaded.button(for: .shiftUp), .y, "a remapped shift-up button survives")
+        checks.equal(reloaded.button(for: .volumeUp), .z, "a Mac action survives")
+        checks.equal(reloaded.usesDesktopSwitching, false, "no desktop action was assigned")
 
         // A blob written before the readout moved to MyWhoosh's 30 gears has no
         // `startingGear` key at all. Its gear count must move to the new default
@@ -262,7 +311,7 @@ func runSettingsChecks(_ checks: Checks) {
         var beforeThirtyGears = GearUpSettings.default
         beforeThirtyGears.transportMode = .network
         beforeThirtyGears.showInMenuBar = false
-        beforeThirtyGears.shiftUpButton = .y
+        beforeThirtyGears.assign(.y, to: .shiftUp)
 
         if let encoded = try? JSONEncoder().encode(beforeThirtyGears),
            let parsed = try? JSONSerialization.jsonObject(with: encoded),
@@ -277,12 +326,37 @@ func runSettingsChecks(_ checks: Checks) {
                 checks.equal(migrated.startingGear, 15, "a migrated blob starts in gear 15")
                 checks.equal(migrated.transportMode, .network, "a migrated blob keeps its transport")
                 checks.equal(migrated.showInMenuBar, false, "a migrated blob keeps its menu bar choice")
-                checks.equal(migrated.shiftUpButton, .y, "a migrated blob keeps its button map")
+                checks.equal(migrated.button(for: .shiftUp), .y, "a migrated blob keeps its button map")
             } else {
                 checks.expect(false, "could not re-encode a pre-30-gear settings blob")
             }
         } else {
             checks.expect(false, "could not build a pre-30-gear settings blob")
+        }
+
+        // A blob from when a button could only shift: the two old keys and no
+        // assignment list. They are exactly the map to carry over, and they must
+        // not be lost on the next save.
+        let shiftOnlyBlob: [String: Any] = [
+            "gearCount": 30,
+            "startingGear": 15,
+            "transportMode": "network",
+            "showInMenuBar": false,
+            "shiftUpButton": RideButtonMask.y.rawValue,
+            "shiftDownButton": RideButtonMask.z.rawValue,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: shiftOnlyBlob) {
+            defaults.set(data, forKey: "gearup.settings")
+            let migrated = store.load()
+            checks.equal(migrated.button(for: .shiftUp), .y, "an old shift-only blob keeps its shift-up button")
+            checks.equal(migrated.button(for: .shiftDown), .z, "an old shift-only blob keeps its shift-down button")
+            checks.equal(migrated.buttonAssignments.count, 2, "and nothing else is invented")
+
+            store.save(migrated)
+            let resaved = store.load()
+            checks.equal(resaved.buttonMap, migrated.buttonMap, "the migrated map survives the next save")
+        } else {
+            checks.expect(false, "could not build a shift-only settings blob")
         }
 
         defaults.set(Data("not json".utf8), forKey: "gearup.settings")

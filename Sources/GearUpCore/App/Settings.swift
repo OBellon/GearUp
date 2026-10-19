@@ -25,16 +25,15 @@ public struct GearUpSettings: Equatable, Codable {
     /// Which OpenBikeControl transports to offer MyWhoosh.
     public var transportMode: TransportMode
     public var showInMenuBar: Bool
-    public var shiftUpButton: RideButtonMask
-    public var shiftDownButton: RideButtonMask
+    /// Which button does what, in the puck's own button order.
+    public var buttonAssignments: [ButtonAssignment]
 
     public init(
         gearCount: Int = Drivetrain.defaultGearCount,
         startingGear: Int = Drivetrain.defaultStartingGear,
         transportMode: TransportMode = .both,
         showInMenuBar: Bool = true,
-        shiftUpButton: RideButtonMask = .shiftUpRight,
-        shiftDownButton: RideButtonMask = .b
+        buttonAssignments: [ButtonAssignment] = ButtonAssignment.defaults
     ) {
         // Property observers do not run during initialisation, so the same
         // clamping the observers do is applied here by hand.
@@ -46,27 +45,43 @@ public struct GearUpSettings: Equatable, Codable {
         self.startingGear = min(max(startingGear, 1), clampedCount)
         self.transportMode = transportMode
         self.showInMenuBar = showInMenuBar
-        self.shiftUpButton = shiftUpButton
-        self.shiftDownButton = shiftDownButton
+        self.buttonAssignments = GearUpSettings.normalised(buttonAssignments)
     }
 
-    /// Decoding is deliberately tolerant, with one migration.
+    /// Decoding is deliberately tolerant, with one migration per shape change.
     ///
-    /// The shape changed when the readout moved from 12 gears to MyWhoosh's 30,
-    /// so a blob written before that has no `startingGear` key. Its `gearCount`
-    /// was almost always the old default rather than a deliberate choice, so the
-    /// two gear fields take the new defaults while every other preference —
-    /// transport, menu bar, button map — is kept. Anything unreadable falls back
-    /// to its own default rather than discarding the whole blob.
+    /// The gear shape changed when the readout moved from 12 gears to MyWhoosh's
+    /// 30, so a blob written before that has no `startingGear` key: its
+    /// `gearCount` was almost always the old default rather than a deliberate
+    /// choice, so the two gear fields take the new defaults while every other
+    /// preference is kept.
+    ///
+    /// The button shape changed when buttons stopped being only shifts: the old
+    /// blob has `shiftUpButton` and `shiftDownButton`, which are exactly the two
+    /// assignments to carry over. Anything unreadable falls back to its own
+    /// default rather than discarding the whole blob.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let storedGearCount = try container.decodeIfPresent(Int.self, forKey: .gearCount)
         let storedStartingGear = try container.decodeIfPresent(Int.self, forKey: .startingGear)
         let transportMode = try container.decodeIfPresent(TransportMode.self, forKey: .transportMode)
         let showInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showInMenuBar)
-        let shiftUpButton = try container.decodeIfPresent(RideButtonMask.self, forKey: .shiftUpButton)
-        let shiftDownButton = try container.decodeIfPresent(RideButtonMask.self, forKey: .shiftDownButton)
+        let storedAssignments = try container.decodeIfPresent([ButtonAssignment].self, forKey: .buttonAssignments)
+        let storedShiftUp = try container.decodeIfPresent(RideButtonMask.self, forKey: .shiftUpButton)
+        let storedShiftDown = try container.decodeIfPresent(RideButtonMask.self, forKey: .shiftDownButton)
         let writtenBeforeThirtyGears = storedStartingGear == nil
+
+        let assignments: [ButtonAssignment]
+        if let storedAssignments {
+            assignments = storedAssignments
+        } else if storedShiftUp != nil || storedShiftDown != nil {
+            assignments = [
+                ButtonAssignment(button: storedShiftUp ?? .shiftUpRight, action: .shiftUp),
+                ButtonAssignment(button: storedShiftDown ?? .b, action: .shiftDown),
+            ]
+        } else {
+            assignments = ButtonAssignment.defaults
+        }
 
         self.init(
             gearCount: writtenBeforeThirtyGears
@@ -75,34 +90,89 @@ public struct GearUpSettings: Equatable, Codable {
             startingGear: storedStartingGear ?? Drivetrain.defaultStartingGear,
             transportMode: transportMode ?? .both,
             showInMenuBar: showInMenuBar ?? true,
-            shiftUpButton: shiftUpButton ?? .shiftUpRight,
-            shiftDownButton: shiftDownButton ?? .b
+            buttonAssignments: assignments
         )
     }
 
-    public var buttonMap: ButtonMap {
-        ButtonMap(shiftUp: shiftUpButton, shiftDown: shiftDownButton)
+    /// Writes the current shape only. The two legacy button keys are read-only,
+    /// so a saved blob never carries both the old and the new map.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(gearCount, forKey: .gearCount)
+        try container.encode(startingGear, forKey: .startingGear)
+        try container.encode(transportMode, forKey: .transportMode)
+        try container.encode(showInMenuBar, forKey: .showInMenuBar)
+        try container.encode(buttonAssignments, forKey: .buttonAssignments)
     }
 
-    /// Points a puck button at an action, through `ButtonMap.assign` so the two
-    /// actions swap rather than collide. Reports what happened.
+    public var buttonMap: ButtonMap {
+        var map: [RideButtonMask: ButtonAction] = [:]
+        for pair in buttonAssignments {
+            map[pair.button] = pair.action
+        }
+        return ButtonMap(assignments: map)
+    }
+
+    /// The button carrying an action, if any.
+    public func button(for action: ButtonAction) -> RideButtonMask? {
+        buttonMap.button(for: action)
+    }
+
+    /// True when a button changes desktops, which is the only action that needs
+    /// the Accessibility grant, so the settings screen only offers it then.
+    public var usesDesktopSwitching: Bool {
+        buttonAssignments.contains { $0.action == .nextSpace || $0.action == .previousSpace }
+    }
+
+    /// Points a puck button at an action, through `ButtonMap.assign` so actions
+    /// swap rather than collide. Reports what happened.
     @discardableResult
-    public mutating func assign(_ button: RideButtonMask, to action: ShiftAction) -> ButtonMap.Assignment {
+    public mutating func assign(
+        _ button: RideButtonMask,
+        to action: ButtonAction?
+    ) -> ButtonMap.Assignment {
         var map = buttonMap
         let result = map.assign(button, to: action)
         guard result != .unchanged else { return result }
-        shiftUpButton = map.shiftUp
-        shiftDownButton = map.shiftDown
+        buttonAssignments = GearUpSettings.normalised(map.all)
         return result
     }
 
     /// Puts the button map back to the shipped `+` and `B`.
     public mutating func restoreDefaultButtonMap() {
-        shiftUpButton = ButtonMap.default.shiftUp
-        shiftDownButton = ButtonMap.default.shiftDown
+        buttonAssignments = ButtonAssignment.defaults
     }
 
     public static let `default` = GearUpSettings()
+
+    /// One assignment per button, one action per assignment, in puck order.
+    private static func normalised(_ pairs: [ButtonAssignment]) -> [ButtonAssignment] {
+        var map: [RideButtonMask: ButtonAction] = [:]
+        for pair in pairs {
+            map[pair.button] = pair.action
+        }
+        return ButtonMap(assignments: map).all
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case gearCount
+        case startingGear
+        case transportMode
+        case showInMenuBar
+        case buttonAssignments
+        /// Written by versions where a button could only shift.
+        case shiftUpButton
+        case shiftDownButton
+    }
+}
+
+extension ButtonAssignment {
+    /// What the puck ships with: `+` shifts up, `B` shifts down, the other three
+    /// buttons wait for the rider to give them something to do.
+    public static let defaults: [ButtonAssignment] = [
+        ButtonAssignment(button: .shiftUpRight, action: .shiftUp),
+        ButtonAssignment(button: .b, action: .shiftDown),
+    ]
 }
 
 /// Persists `GearUpSettings` in `UserDefaults` as JSON.
