@@ -209,13 +209,63 @@ func runZwiftChecks(_ checks: Checks) {
             "the drop a reset causes is recognised as GearUp's own, not as the puck's"
         )
 
-        // The Info-Request is spent once per connection, for the device info it
-        // fetches — not as a keep-awake: sent every 5 s for a minute, the puck
-        // answered and the link still died 61 s after the last press.
+        // The reads ride on the connection that just came up, and each is a `Get`
+        // for one data object. The Info-Request is not a keep-awake: sent every 5 s
+        // for a whole minute, the puck answered and the link still died 61 s after
+        // the last press.
+        checks.equal(
+            ZwiftClickCodec.getCommand(dataObjectID: ZwiftClickCodec.deviceInfoObjectID),
+            [0x00, 0x08, 0x00],
+            "a read is command 0 with the data object id in field 1"
+        )
         checks.equal(
             ZwiftClickCodec.infoRequest,
-            [0x00, 0x08, 0x00],
-            "the info request is command 0 with data object id 0"
+            ZwiftClickCodec.getCommand(dataObjectID: ZwiftClickCodec.deviceInfoObjectID),
+            "the info request is a read of the device info"
+        )
+        checks.equal(
+            ZwiftClickCodec.batteryRequest,
+            [0x00, 0x08, 0x83, 0x06],
+            "the battery object 771 encodes as 83 06"
+        )
+        checks.equal(
+            ZwiftClickCodec.securityRequest,
+            [0x00, 0x08, 0x40],
+            "the BLE security page 64 encodes as 40"
+        )
+    }
+
+    checks.group("Click V2 data objects") {
+        // Neither of these two answers has been seen on hardware yet, so their
+        // fixtures are built from the field numbers in Zwift's protocol rather than
+        // captured: BatteryStatus { chgState, percLevel, timeToEmpty, timeToFull },
+        // and the BleSecurityPage { secureConnectionStatus, windowStatus }.
+        let battery = ZwiftDataObject.split(answer: [
+            0x08, 0x83, 0x06, 0x12, 0x09, 0x0A, 0x07, 0x08, 0x00, 0x10, 0x4E, 0x18, 0xF0, 0x01,
+        ]).flatMap(ZwiftBatteryStatus.decode)
+        checks.equal(battery?.level, 78, "the battery level comes back")
+        checks.equal(battery?.charging, "not charging", "so does the charging state")
+        checks.equal(battery?.minutesToEmpty, 240, "and the minutes it thinks it has left")
+        checks.expect(
+            (battery?.summary ?? "").hasPrefix("78%"),
+            "the summary leads with the level"
+        )
+
+        let security = ZwiftDataObject.split(answer: [
+            0x08, 0x40, 0x12, 0x06, 0x0A, 0x04, 0x08, 0x02, 0x10, 0x01,
+        ]).flatMap(ZwiftSecurityStatus.decode)
+        checks.equal(security?.connection, "active", "the secure connection state comes back")
+        checks.equal(security?.window, "open", "so does the pairing window")
+        checks.expect(security?.isActive == true, "and it reads as paired")
+
+        let notBattery = ZwiftDataObject.split(answer: [0x08, 0x00, 0x12, 0x02, 0x0A, 0x00])
+        checks.expect(
+            notBattery.flatMap(ZwiftBatteryStatus.decode) == nil,
+            "the battery decoder refuses an object that is not the battery"
+        )
+        checks.expect(
+            notBattery.flatMap(ZwiftSecurityStatus.decode) == nil,
+            "and so does the security one"
         )
     }
 

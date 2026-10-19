@@ -304,15 +304,83 @@ public struct ClickKeyPadStatus: Equatable {
     }
 }
 
+/// One data object, as a controller answers a `Get` with.
+///
+/// The answer arrives as `GET_RESPONSE` (opcode `0x3C`): the id the request asked
+/// about, and the object itself. Whatever the object is — a `DevInfoPage`, a
+/// `BatteryStatus`, the BLE security page — it is one of the ids from Zwift's
+/// published list, so the id travels with the bytes and the typed decoders below
+/// read the ones GearUp knows.
+public struct ZwiftDataObject: Equatable {
+    public let objectID: Int
+    public let data: [UInt8]
+
+    public init(objectID: Int, data: [UInt8]) {
+        self.objectID = objectID
+        self.data = data
+    }
+
+    /// Splits a `GET_RESPONSE` payload — the bytes that follow the opcode — into
+    /// the object it answers for and the object itself.
+    ///
+    /// The object arrives wrapped in a one-field message: the real device info
+    /// answer is `08 00 12 46 0A 44 …`, where `0A 44` opens the page itself. The
+    /// wrapper is peeled off when there is one and the bytes are left alone when
+    /// there is not, so either shape reads.
+    public static func split(answer payload: [UInt8]) -> ZwiftDataObject? {
+        var reader = ProtoReader(payload)
+        var objectID: UInt64?
+        var raw: [UInt8]?
+        while let key = reader.readKey() {
+            switch (key.field, key.wire) {
+            case (1, 0):
+                objectID = reader.readVarint()
+            case (2, 2):
+                raw = reader.readLengthDelimited()
+            default:
+                guard reader.skip(wire: key.wire) else { return nil }
+            }
+        }
+        guard let objectID, let raw else { return nil }
+        return ZwiftDataObject(objectID: Int(clamping: objectID), data: unwrap(raw))
+    }
+
+    /// A readable line for the object, for the objects GearUp knows.
+    ///
+    /// The probe prints this, so a run says what came back rather than only which
+    /// bytes did.
+    public var summary: String? {
+        switch objectID {
+        case ZwiftClickCodec.deviceInfoObjectID:
+            return ZwiftDevInfoPage.decode(self)?.summary
+        case ZwiftClickCodec.batteryObjectID:
+            return ZwiftBatteryStatus.decode(self)?.summary
+        case ZwiftClickCodec.securityObjectID:
+            return ZwiftSecurityStatus.decode(self)?.summary
+        default:
+            return nil
+        }
+    }
+
+    /// The payload of the object's first field, when that field is
+    /// length-delimited — the wrapper a data object usually arrives in.
+    private static func unwrap(_ data: [UInt8]) -> [UInt8] {
+        var reader = ProtoReader(data)
+        guard let key = reader.readKey(), key.wire == 2, let nested = reader.readLengthDelimited() else {
+            return data
+        }
+        return nested
+    }
+}
+
 /// The device info a controller answers an Info-Request with.
 ///
-/// The answer arrives as `GET_RESPONSE` (opcode `0x3C`), a `GetResponse` whose
-/// `dataObjectData` holds the `DevInfoPage` of Zwift's protocol. On the Click V2
-/// measured here that page reads protocol 515, hardware `B.0`, firmware
-/// `00 00 02 01` and serial `0A-D4060F930E95`.
+/// The object's `DevInfoPage` from Zwift's protocol. On the Click V2 measured here
+/// it reads protocol 515, hardware `B.0`, firmware `00 00 02 01` and serial
+/// `0A-D4060F930E95`.
 public struct ZwiftDevInfoPage: Equatable {
     /// The `dataObjectId` the device answered for. `0` is the device info.
-    public let objectID: UInt64
+    public let objectID: Int
     public let protocolVersion: Int?
     public let firmware: [UInt8]
     public let hardware: String?
@@ -344,47 +412,21 @@ public struct ZwiftDevInfoPage: Equatable {
     /// Decodes the payload of a `GET_RESPONSE` notification: the bytes that
     /// follow the opcode.
     public static func decode(getResponse payload: [UInt8]) -> ZwiftDevInfoPage? {
-        var reader = ProtoReader(payload)
-        var objectID: UInt64?
-        var data: [UInt8]?
-        while let key = reader.readKey() {
-            switch (key.field, key.wire) {
-            case (1, 0):
-                objectID = reader.readVarint()
-            case (2, 2):
-                data = reader.readLengthDelimited()
-            default:
-                guard reader.skip(wire: key.wire) else { return nil }
-            }
-        }
-        guard let objectID, let data else { return nil }
-
-        // The data object arrives wrapped: the real answer's `dataObjectData` is a
-        // single field-1 message holding the page (the reference parses those same
-        // bytes as the page directly, which does not line up with its own field
-        // numbers). Both shapes are tried, and only something that names the device
-        // or carries its serial counts, so a different data object decodes as
-        // nothing rather than as blanks.
-        for bytes in [unwrap(data), data] {
-            let page = decode(page: bytes, objectID: objectID)
-            if page.name != nil || page.serial != nil {
-                return page
-            }
-        }
-        return nil
+        ZwiftDataObject.split(answer: payload).flatMap(decode)
     }
 
-    /// The payload of a data object's first field, when that field is
-    /// length-delimited — the wrapper a data object usually arrives in.
-    private static func unwrap(_ data: [UInt8]) -> [UInt8] {
-        var reader = ProtoReader(data)
-        guard let key = reader.readKey(), key.wire == 2, let nested = reader.readLengthDelimited() else {
-            return data
-        }
-        return nested
+    /// Decodes a data object that claims to be the device info.
+    ///
+    /// Only something that names the device or carries its serial counts, so a
+    /// different data object decodes as nothing rather than as blanks.
+    public static func decode(_ object: ZwiftDataObject) -> ZwiftDevInfoPage? {
+        guard object.objectID == ZwiftClickCodec.deviceInfoObjectID else { return nil }
+        let page = decode(page: object.data)
+        guard page.name != nil || page.serial != nil else { return nil }
+        return page
     }
 
-    private static func decode(page: [UInt8], objectID: UInt64) -> ZwiftDevInfoPage {
+    private static func decode(page: [UInt8]) -> ZwiftDevInfoPage {
         var reader = ProtoReader(page)
         var protocolVersion: Int?
         var firmware: [UInt8] = []
@@ -413,7 +455,7 @@ public struct ZwiftDevInfoPage: Equatable {
         }
 
         return ZwiftDevInfoPage(
-            objectID: objectID,
+            objectID: ZwiftClickCodec.deviceInfoObjectID,
             protocolVersion: protocolVersion,
             firmware: firmware,
             hardware: hardware,
@@ -425,6 +467,138 @@ public struct ZwiftDevInfoPage: Equatable {
 
     private static func text(_ bytes: [UInt8]) -> String {
         String(decoding: bytes, as: UTF8.self)
+    }
+}
+
+/// The battery, as a controller answers a battery request with.
+///
+/// `BatteryStatus` from Zwift's protocol. The controller does not notify any of
+/// this on its own, so it is only ever known because it was asked for.
+public struct ZwiftBatteryStatus: Equatable {
+    public let objectID: Int
+    public let level: Int?
+    public let charging: String?
+    /// Minutes the controller thinks it has left, and what a charge would take.
+    public let minutesToEmpty: Int?
+    public let minutesToFull: Int?
+
+    /// `ChargingState` from the protocol, in words.
+    private static func charging(_ state: Int) -> String? {
+        switch state {
+        case 0: return "not charging"
+        case 1: return "charging"
+        case 2: return "charged"
+        default: return nil
+        }
+    }
+
+    public var summary: String {
+        var parts: [String] = []
+        if let level { parts.append("\(level)%") }
+        if let charging { parts.append(charging) }
+        if let minutesToEmpty { parts.append("about \(minutesToEmpty) min left") }
+        if let minutesToFull { parts.append("about \(minutesToFull) min to full") }
+        return parts.isEmpty ? "no reading" : parts.joined(separator: ", ")
+    }
+
+    public static func decode(_ object: ZwiftDataObject) -> ZwiftBatteryStatus? {
+        guard object.objectID == ZwiftClickCodec.batteryObjectID else { return nil }
+        var reader = ProtoReader(object.data)
+        var chargingState: Int?
+        var level: Int?
+        var minutesToEmpty: Int?
+        var minutesToFull: Int?
+
+        while let key = reader.readKey() {
+            switch (key.field, key.wire) {
+            case (1, 0):
+                chargingState = reader.readVarint().map(Int.init)
+            case (2, 0):
+                level = reader.readVarint().map(Int.init)
+            case (3, 0):
+                minutesToEmpty = reader.readVarint().map(Int.init)
+            case (4, 0):
+                minutesToFull = reader.readVarint().map(Int.init)
+            default:
+                guard reader.skip(wire: key.wire) else { return nil }
+            }
+        }
+
+        guard level != nil || chargingState != nil else { return nil }
+        return ZwiftBatteryStatus(
+            objectID: object.objectID,
+            level: level,
+            charging: chargingState.flatMap(charging),
+            minutesToEmpty: minutesToEmpty,
+            minutesToFull: minutesToFull
+        )
+    }
+}
+
+/// Whether the controller counts its link as paired, and whether a pairing window
+/// is open.
+///
+/// This is what its LED is about. The `BleSecurityPage` from Zwift's protocol: a
+/// controller that never reaches `active` keeps showing "ready to pair" no matter
+/// what is written to it, because the pairing itself is Zwift's own business.
+public struct ZwiftSecurityStatus: Equatable {
+    public let objectID: Int
+    /// `BleSecureConnectionStatus`, in words.
+    public let connection: String?
+    /// `BleSecureConnectionWindowStatus`, in words.
+    public let window: String?
+
+    private static func connection(_ status: Int) -> String? {
+        switch status {
+        case 0: return "none"
+        case 1: return "in progress"
+        case 2: return "active"
+        case 3: return "rejected"
+        default: return nil
+        }
+    }
+
+    private static func window(_ status: Int) -> String? {
+        switch status {
+        case 0: return "closed"
+        case 1: return "open"
+        default: return nil
+        }
+    }
+
+    /// Whether the controller calls the link paired at all.
+    public var isActive: Bool { connection == "active" }
+
+    public var summary: String {
+        var parts: [String] = []
+        parts.append("secure connection \(connection ?? "unknown")")
+        if let window { parts.append("pairing window \(window)") }
+        return parts.joined(separator: ", ")
+    }
+
+    public static func decode(_ object: ZwiftDataObject) -> ZwiftSecurityStatus? {
+        guard object.objectID == ZwiftClickCodec.securityObjectID else { return nil }
+        var reader = ProtoReader(object.data)
+        var connectionStatus: Int?
+        var windowStatus: Int?
+
+        while let key = reader.readKey() {
+            switch (key.field, key.wire) {
+            case (1, 0):
+                connectionStatus = reader.readVarint().map(Int.init)
+            case (2, 0):
+                windowStatus = reader.readVarint().map(Int.init)
+            default:
+                guard reader.skip(wire: key.wire) else { return nil }
+            }
+        }
+
+        guard connectionStatus != nil || windowStatus != nil else { return nil }
+        return ZwiftSecurityStatus(
+            objectID: object.objectID,
+            connection: connectionStatus.flatMap(connection),
+            window: windowStatus.flatMap(window)
+        )
     }
 }
 
@@ -469,7 +643,8 @@ public enum ZwiftNotification: Equatable {
     case handshake([UInt8])
     case empty
     case disconnect
-    case deviceInfo([UInt8])
+    /// An answer to a `Get`: a data object, whatever it happens to be.
+    case dataObject(ZwiftDataObject)
     case unknown(type: UInt8, payload: [UInt8])
 }
 
@@ -506,16 +681,55 @@ public enum ZwiftClickCodec {
         [0x18, 0x08, UInt8(truncatingIfNeeded: procedure)]
     }
 
-    /// Command 0 with the data object id 0: the Info-Request, to which the
-    /// controller answers with its device info.
+    /// A `Get` for one data object: opcode 0 with the id in protobuf field 1.
     ///
-    /// This is the documented answer to *standby*: a public ESP32 reader writes it
-    /// every 5 s and warns that at 15 s "the Clicks go to sleep". It does not hold
-    /// the link by itself — GearUp sent it every 5 s for a whole minute, watched
-    /// the puck answer with its device info, and saw the link die 61 s after the
-    /// last press anyway — so GearUp spends it once per connection instead, for
-    /// the firmware and serial the answer carries.
-    public static let infoRequest: [UInt8] = [0x00, 0x08, 0x00]
+    /// This is the protocol's read. The controller answers with a `GET_RESPONSE`
+    /// (`0x3C`) carrying the id and the object, and the published list of ids says
+    /// which is which: 0 is the device info, 64 the BLE security page (whether the
+    /// link is paired, and whether a pairing window is open) and 771 the battery.
+    public static func getCommand(dataObjectID: Int) -> [UInt8] {
+        [0x00, 0x08] + varint(dataObjectID)
+    }
+
+    /// The data objects GearUp asks a controller about.
+    public static let deviceInfoObjectID = 0
+    public static let securityObjectID = 64
+    public static let batteryObjectID = 771
+
+    /// The Info-Request: a `Get` for the device info.
+    ///
+    /// This is also the documented answer to *standby* — a public ESP32 reader
+    /// writes it every 5 s and warns that at 15 s "the Clicks go to sleep" — but it
+    /// does not hold the link by itself: GearUp sent it every 5 s for a whole
+    /// minute, watched the puck answer, and saw the link die 61 s after the last
+    /// press anyway. So it is spent once per connection, for what the answer says
+    /// about the unit: its name, firmware, hardware revision and serial.
+    public static let infoRequest = getCommand(dataObjectID: deviceInfoObjectID)
+
+    /// Asks whether the controller counts the link as paired.
+    ///
+    /// The answer is what its LED is about, and it is not in anything the puck
+    /// volunteers: its `secureConnectionStatus` only comes back if it is asked for.
+    public static let securityRequest = getCommand(dataObjectID: securityObjectID)
+
+    /// Asks for the battery: level, charging state, and minutes left.
+    ///
+    /// The controller never notifies its battery — GearUp's whole log has not one
+    /// such notification in it — so asking is the only way to know.
+    public static let batteryRequest = getCommand(dataObjectID: batteryObjectID)
+
+    /// Protobuf varint encoding, for the fields GearUp writes.
+    private static func varint(_ value: Int) -> [UInt8] {
+        var bytes: [UInt8] = []
+        var remaining = UInt64(max(0, value))
+        repeat {
+            var byte = UInt8(remaining & 0x7F)
+            remaining >>= 7
+            if remaining != 0 { byte |= 0x80 }
+            bytes.append(byte)
+        } while remaining != 0
+        return bytes
+    }
 
     public static func decode(type: UInt8, payload: [UInt8]) -> ZwiftNotification {
         switch ZwiftMessageType(rawValue: type) {
@@ -543,7 +757,12 @@ public enum ZwiftClickCodec {
             return .disconnect
 
         case .getResponse:
-            return .deviceInfo(payload)
+            // The answer says which object it carries, and GearUp only knows a few
+            // of them, so the id travels with the bytes.
+            if let object = ZwiftDataObject.split(answer: payload) {
+                return .dataObject(object)
+            }
+            return .unknown(type: type, payload: payload)
 
         case .logData, .statusResponse, .rideOn:
             return .unknown(type: type, payload: payload)
@@ -623,8 +842,12 @@ public enum ZwiftClickCodec {
         case .disconnect:
             return "type=0xFE DISCONNECT"
 
-        case .deviceInfo(let payload):
-            return "type=0x3C GET_RESPONSE payload=\(payload.hexString)"
+        case .dataObject(let object):
+            let id = "type=0x3C GET_RESPONSE object=\(object.objectID)"
+            guard let summary = object.summary else {
+                return "\(id) payload=\(object.data.hexString)"
+            }
+            return "\(id) \(summary)"
 
         case .unknown(let type, let payload):
             let name = ZwiftMessageType(rawValue: type).map { " (\($0.name))" } ?? ""

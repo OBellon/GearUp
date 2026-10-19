@@ -266,8 +266,11 @@ connection before it counts itself in-session, and the LED is what shows the
 difference. Nothing in the published protocol touches the LED (the reference's only
 LED code draws a picture for a different device), and macOS CoreBluetooth has no API
 to start that pairing, so a third-party bridge leaves the puck showing "ready to
-pair" for as long as it is connected. The LED does go out when the puck sleeps,
-which GearUp lets it do whenever there is nothing to shift for.
+pair" for as long as it is connected. GearUp asks for that state on every connection
+(the data object 64, one of the ids the protocol lists), so the log says which it
+is — `secure connection none, pairing window closed` is the flashing LED, and
+`active` would mean the puck counts the link as paired. The LED goes out when the
+puck sleeps, which GearUp lets it do whenever there is nothing to shift for.
 
 **A reset is what puts the window back — and a reset is a reboot.** BikeControl's
 own stub for its Click logic says it *"drives the periodic RESET recovery"*, and a
@@ -296,7 +299,10 @@ press. The documented Info-Request `00 08 00` every 5 seconds did not help eithe
 It is still worth spending once per connection, because what comes back is a
 `DevInfoPage`: the unit tested names itself `Zwift Click`, hardware `B.0`, firmware
 `1.2.0` — the release Zwift calls current — serial `0A-D4060F930E95` and protocol
-515. That is where the log's device info line comes from.
+515. That is where the log's device info line comes from. The battery is asked for
+at the same time (object 771), and it is the only way to know it: the controller has
+never sent a battery notification, in any log GearUp has. What it answers with —
+level, charging state, minutes left — is what the app shows beside the puck's name.
 
 Nothing in the published protocol switches the sleep off: the opcodes cover
 firmware, battery, the trainer and powering *off*, and the data objects the device

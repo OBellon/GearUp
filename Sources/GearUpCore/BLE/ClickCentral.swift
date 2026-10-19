@@ -276,6 +276,13 @@ public final class ClickCentral: NSObject {
         central.cancelPeripheralConnection(target)
     }
 
+    /// Whether a new connection also starts the session.
+    ///
+    /// The probe turns this off to watch what a controller says without being
+    /// asked for anything; the bridge always starts the session, because that is
+    /// what makes the button stream arrive.
+    public var sendsHandshake = true
+
     /// Writes the Click V2 start command to the sync-RX characteristic.
     public func sendHandshake() {
         guard let peripheral = target, let syncRxCharacteristic else {
@@ -284,11 +291,18 @@ public final class ClickCentral: NSObject {
         }
         let command = ZwiftClickCodec.clickV2StartCommand
         peripheral.writeValue(Data(command), for: syncRxCharacteristic, type: .withoutResponse)
-        // The Info-Request once per connection, for what it is worth: the puck
-        // answers with its device info, which is how the log names the firmware and
-        // the serial. It is not a keep-awake — every 5 s for a minute did not stop
-        // the sleep — so it is not repeated.
-        peripheral.writeValue(Data(ZwiftClickCodec.infoRequest), for: syncRxCharacteristic, type: .withoutResponse)
+        // Then ask about the puck itself: the device info, the battery, and whether
+        // it counts the link as paired. None of the three is ever volunteered, and
+        // each is one write on a connection that has just come up. The Info-Request
+        // is not a keep-awake — a whole minute of them, every 5 s, did not stop the
+        // sleep — so nothing here is repeated until the link is remade.
+        for request in [
+            ZwiftClickCodec.infoRequest,
+            ZwiftClickCodec.batteryRequest,
+            ZwiftClickCodec.securityRequest,
+        ] {
+            peripheral.writeValue(Data(request), for: syncRxCharacteristic, type: .withoutResponse)
+        }
         didSendHandshake = true
         lastActivity = Date()
         onEvent?(.handshakeSent(command))
@@ -657,7 +671,7 @@ extension ClickCentral: CBPeripheralDelegate {
             indicateReady = characteristic.isNotifying
         }
 
-        if notifyReady && indicateReady && !didSendHandshake {
+        if notifyReady && indicateReady && !didSendHandshake, sendsHandshake {
             onEvent?(.log("Subscriptions ready. Sending handshake."))
             sendHandshake()
         }

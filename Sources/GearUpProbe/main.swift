@@ -211,6 +211,9 @@ central.keepsPuckAwake = options.idleResetThreshold > 0
 if options.idleResetThreshold > 0 {
     central.idleResetThreshold = options.idleResetThreshold
 }
+// `--no-handshake` used to only say it skipped the start command; the write is
+// what actually has to be held back.
+central.sendsHandshake = !options.skipHandshake
 if let procedure = options.resetProcedure {
     central.resetPayload = ZwiftClickCodec.resetCommand(procedure: procedure)
 }

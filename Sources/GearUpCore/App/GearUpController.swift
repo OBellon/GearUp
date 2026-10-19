@@ -505,12 +505,8 @@ public final class GearUpController: ObservableObject {
         case .handshake(let value):
             log.add("Click V2 acknowledged the handshake (\(value.hexString)).", level: .success)
 
-        case .deviceInfo(let value):
-            if let info = ZwiftDevInfoPage.decode(getResponse: value) {
-                log.add("Click V2 device info: \(info.summary).")
-            } else {
-                log.add("Click V2 device info: \(value.hexString)")
-            }
+        case .dataObject(let object):
+            handleDataObject(object)
 
         case .empty:
             log.add("Click V2 sent an empty report.")
@@ -530,6 +526,43 @@ public final class GearUpController: ObservableObject {
                 log.add(String(format: "Unknown message 0x%02X %@", type, payload.hexString), level: .warning)
             }
         }
+    }
+
+    /// Reads out a data object the puck answered a `Get` with.
+    ///
+    /// GearUp asks about three ids on every connection and each one earns its own
+    /// line: the device info, the battery — which also sets the level the UI shows
+    /// — and the BLE security state, which is the reason the puck's LED sits in
+    /// pairing mode, since it never gets past `none`.
+    private func handleDataObject(_ object: ZwiftDataObject) {
+        switch object.objectID {
+        case ZwiftClickCodec.deviceInfoObjectID:
+            if let info = ZwiftDevInfoPage.decode(object) {
+                log.add("Click V2 device info: \(info.summary).")
+                return
+            }
+
+        case ZwiftClickCodec.batteryObjectID:
+            if let battery = ZwiftBatteryStatus.decode(object) {
+                click.battery = battery.level
+                log.add("Click V2 battery \(battery.summary).")
+                return
+            }
+
+        case ZwiftClickCodec.securityObjectID:
+            if let security = ZwiftSecurityStatus.decode(object) {
+                let note = security.isActive
+                    ? ""
+                    : " That is why its LED stays in pairing mode."
+                log.add("Click V2 secure connection: \(security.summary).\(note)")
+                return
+            }
+
+        default:
+            break
+        }
+
+        log.add("Click V2 data object \(object.objectID): \(object.data.hexString)")
     }
 }
 
