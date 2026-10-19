@@ -515,7 +515,15 @@ public final class GearUpController: ObservableObject {
             log.add("Click V2 reported a disconnect.", level: .warning)
 
         case .unknown(let type, let payload):
-            log.add(String(format: "Unknown message 0x%02X %@", type, payload.hexString), level: .warning)
+            // The puck answers the keep-alive on the indicating characteristic.
+            // Those replies are not rider input, and identical ones collapse into
+            // a repeat count above, so a single quiet line shows it is still
+            // answering without turning every request into a warning.
+            if ZwiftUUID.isCharacteristic(characteristic, ZwiftUUID.syncTxCharacteristic) {
+                log.add(String(format: "Click V2 answered (0x%02X): %@", type, payload.hexString))
+            } else {
+                log.add(String(format: "Unknown message 0x%02X %@", type, payload.hexString), level: .warning)
+            }
         }
     }
 }

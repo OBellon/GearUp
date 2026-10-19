@@ -359,6 +359,16 @@ public enum ZwiftClickCodec {
     /// Plain `"RideOn"`, used by older controllers.
     public static let rideOn: [UInt8] = Array("RideOn".utf8)
 
+    /// Command 0 with an empty field, written to the control point: the
+    /// Info-Request, to which the controller answers in indications.
+    ///
+    /// This is what keeps a Click awake. The `RideOn` header does not: the puck
+    /// echoes it happily and still sleeps, which GearUp measured on real hardware
+    /// (bare headers every 20 s, three answered, link dead 61 s after the last
+    /// press). A public ESP32 reader writes this every 5 s instead and warns that
+    /// at 15 s "the Clicks go to sleep".
+    public static let infoRequest: [UInt8] = [0x00, 0x08, 0x00]
+
     public static func decode(type: UInt8, payload: [UInt8]) -> ZwiftNotification {
         switch ZwiftMessageType(rawValue: type) {
         case .controllerNotification:

@@ -162,35 +162,34 @@ func runZwiftChecks(_ checks: Checks) {
     }
 
     checks.group("Click V2 keep-awake") {
-        // The puck drops the link 60 seconds after the last press: measured on
-        // real hardware at 61, 61, 61 and 62 seconds across one session, and in
-        // one window with no press at all, 61 s after connecting instead. The
-        // keep-alive has to land well inside that.
-        checks.expect(
-            ClickCentral.defaultKeepAliveInterval < 60,
-            "the keep-alive lands before the puck's ~60 s sleep (\(Int(ClickCentral.defaultKeepAliveInterval)) s)"
+        // The keep-alive is the Info-Request, not the `RideOn` header: bare
+        // headers every 20 s were answered three times on real hardware and the
+        // link still died 61 s after the last press, so the write has to be this
+        // one.
+        checks.equal(
+            ClickCentral.keepAliveCommand,
+            ZwiftClickCodec.infoRequest,
+            "the keep-alive writes the Info-Request"
         )
         checks.expect(
-            ClickCentral.defaultKeepAliveInterval * 3 <= 60,
-            "three keep-alives fit in the window, so one missed write is not fatal"
+            ClickCentral.keepAliveCommand != ZwiftClickCodec.rideOn,
+            "the bare RideOn header is not the keep-alive: the puck echoes it, then sleeps anyway"
+        )
+
+        // Two implementations bracket the cadence: one warns that at 15 s its
+        // Clicks slept, the other writes every 5 s. GearUp's own log agrees that
+        // the puck stops answering well before the link drops at ~60 s.
+        checks.expect(
+            ClickCentral.defaultKeepAliveInterval * 2 <= 15,
+            "two keep-alives fit inside the ~15 s window (\(Int(ClickCentral.defaultKeepAliveInterval)) s apart)"
+        )
+        checks.expect(
+            ClickCentral.defaultKeepAliveInterval < 60,
+            "the keep-alive lands long before the puck's ~60 s link drop"
         )
         checks.expect(
             ClickCentral.reconnectInterval < ClickCentral.defaultKeepAliveInterval,
             "a dropped link is retried sooner than the keep-alive is written"
-        )
-
-        // The keep-alive is the bare header, not the handshake: the start command
-        // is that header plus two bytes, and re-sending a *start* every twenty
-        // seconds is a bet on how the firmware reads it.
-        checks.equal(
-            ClickCentral.keepAliveCommand,
-            ZwiftClickCodec.rideOn,
-            "the keep-alive writes the bare RideOn header"
-        )
-        checks.equal(
-            ZwiftClickCodec.clickV2StartCommand.count,
-            ZwiftClickCodec.rideOn.count + 2,
-            "the start command really is the header plus two bytes"
         )
     }
 

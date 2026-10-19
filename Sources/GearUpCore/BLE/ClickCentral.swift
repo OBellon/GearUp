@@ -143,12 +143,13 @@ public final class ClickCentral: NSObject {
 
     /// While true the puck is held: its link is kept alive and a drop is retried.
     ///
-    /// The puck sleeps **60 seconds after the last press** — measured on real
-    /// hardware at 61, 61, 61 and 62 seconds across one session — and powers down
-    /// once nothing is holding it. That is how it protects its coin cell, and why
-    /// the first shift after a quiet spell is the one that has to wake it.
-    /// Holding it costs battery, so `GearUpController` turns this on only while
-    /// there is something to shift for.
+    /// The puck goes to standby by itself and drops the link **60 seconds after
+    /// the last press** — measured on real hardware at 61, 61, 61 and 62 seconds
+    /// across one session — and powers down once nothing is holding it. That is
+    /// how it protects its coin cell, and why the first shift after a quiet spell
+    /// is the one that has to wake it. Only the Info-Request resets that timer,
+    /// and holding the puck costs battery, so `GearUpController` turns this on
+    /// only while there is something to shift for.
     public var keepsPuckAwake = false {
         didSet {
             guard keepsPuckAwake != oldValue else { return }
@@ -162,21 +163,20 @@ public final class ClickCentral: NSObject {
         }
     }
 
-    /// How often the `RideOn` header is re-sent while the puck is held.
+    /// How often the Info-Request is re-sent while the puck is held.
     public var keepAliveInterval: TimeInterval = ClickCentral.defaultKeepAliveInterval
 
-    /// What the keep-alive actually writes: the bare `RideOn` header rather than
-    /// the start command the handshake uses.
+    /// What the keep-alive writes: the Info-Request.
     ///
-    /// The puck accepts a bare header (`constants.dart` in the reference: "the
-    /// header has to be RIDEON + 2"), and re-sending something that reads as
-    /// *start* every twenty seconds is a bet that the firmware will not restart
-    /// on it — a bet with a rider on the bike.
-    public static let keepAliveCommand: [UInt8] = ZwiftClickCodec.rideOn
+    /// Not the `RideOn` header, which the puck cheerfully echoes back and which
+    /// still does nothing about the sleep — measured here, bare headers every
+    /// 20 seconds were answered three times and the link died anyway, 61 seconds
+    /// after the last press.
+    public static let keepAliveCommand: [UInt8] = ZwiftClickCodec.infoRequest
 
-    /// A third of the puck's own sleep window, so three writes land before it
-    /// would nod off even if one is missed.
-    public static let defaultKeepAliveInterval: TimeInterval = 20
+    /// Well inside the ~15 s window another implementation measured (at 15 s,
+    /// their Clicks slept), so a missed request is not the end of the link.
+    public static let defaultKeepAliveInterval: TimeInterval = 5
 
     /// How often a dropped link is retried while the puck is held. The puck's
     /// radio is off until a button press wakes it, so early attempts simply fail
@@ -251,29 +251,26 @@ public final class ClickCentral: NSObject {
         stopReconnecting()
     }
 
-    /// Re-sends the `RideOn` header, which is what keeps the puck from dropping
-    /// the link 60 seconds after the last press.
-    ///
-    /// A bare header rather than the full start command: the puck accepts the
-    /// header on its own (see `constants.dart` in the reference, "the header has
-    /// to be RIDEON + 2"), and repeating something that reads as *start* every
-    /// twenty seconds is a way to find out the hard way whether the firmware
-    /// restarts on it.
+    /// Re-sends the Info-Request, the write that keeps the puck from dropping the
+    /// link and going to standby.
     public func sendKeepAlive() {
         guard let peripheral = target, let syncRxCharacteristic else { return }
         peripheral.writeValue(Data(Self.keepAliveCommand), for: syncRxCharacteristic, type: .withoutResponse)
         keepAlivesSent += 1
         // One line when it starts proves the mechanism is running; after that a
-        // heartbeat, so a long ride does not bury the log in pings.
+        // heartbeat, so a long ride does not bury the log in requests. The puck's
+        // own answers show up as notifications, and identical ones collapse into
+        // a repeat count, which is where the evidence of "still answering" lives.
         if keepAlivesSent == 1 {
-            onEvent?(.log("Keeping the puck awake: RideOn every \(Int(keepAliveInterval)) s."))
+            onEvent?(.log("Keeping the puck awake: info request every \(Int(keepAliveInterval)) s."))
         } else if keepAlivesSent % Self.keepAliveHeartbeat == 0 {
-            onEvent?(.log("Keep-awake heartbeat: \(keepAlivesSent) RideOn writes."))
+            onEvent?(.log("Keep-awake heartbeat: \(keepAlivesSent) info requests."))
         }
     }
 
-    /// Every how many keep-alives the log says so.
-    public static let keepAliveHeartbeat = 15
+    /// Every how many keep-alives the log says so — five minutes' worth at the
+    /// default cadence.
+    public static let keepAliveHeartbeat = 60
 
     // MARK: - Holding the puck
 
