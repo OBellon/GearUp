@@ -341,8 +341,12 @@ public struct ZwiftDataObject: Equatable {
                 guard reader.skip(wire: key.wire) else { return nil }
             }
         }
-        guard let objectID, let raw else { return nil }
-        return ZwiftDataObject(objectID: Int(clamping: objectID), data: unwrap(raw))
+        guard let objectID else { return nil }
+        // An object whose contents are all at their protocol defaults arrives as
+        // just its id: protobuf does not write zero-valued fields, so an empty
+        // answer is a real answer. It is the whole of the BLE security page on a
+        // controller that has never been paired.
+        return ZwiftDataObject(objectID: Int(clamping: objectID), data: unwrap(raw ?? []))
     }
 
     /// A readable line for the object, for the objects GearUp knows.
@@ -497,7 +501,11 @@ public struct ZwiftBatteryStatus: Equatable {
         if let level { parts.append("\(level)%") }
         if let charging { parts.append(charging) }
         if let minutesToEmpty { parts.append("about \(minutesToEmpty) min left") }
-        if let minutesToFull { parts.append("about \(minutesToFull) min to full") }
+        // The controller reports a "to full" estimate even while it is not charging,
+        // where it reads as a meaningless zero.
+        if charging == "charging", let minutesToFull {
+            parts.append("about \(minutesToFull) min to full")
+        }
         return parts.isEmpty ? "no reading" : parts.joined(separator: ", ")
     }
 
@@ -593,11 +601,16 @@ public struct ZwiftSecurityStatus: Equatable {
             }
         }
 
-        guard connectionStatus != nil || windowStatus != nil else { return nil }
+        guard connectionStatus != nil || windowStatus != nil || object.data.isEmpty else {
+            return nil
+        }
+        // A field that was never written is at its protocol default, which here
+        // means `none` and `closed`: exactly what a controller that has never been
+        // paired answers, and the state its LED shows.
         return ZwiftSecurityStatus(
             objectID: object.objectID,
-            connection: connectionStatus.flatMap(connection),
-            window: windowStatus.flatMap(window)
+            connection: connection(connectionStatus ?? 0),
+            window: window(windowStatus ?? 0)
         )
     }
 }

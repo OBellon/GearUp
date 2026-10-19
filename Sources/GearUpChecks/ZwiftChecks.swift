@@ -202,7 +202,7 @@ func runZwiftChecks(_ checks: Checks) {
         )
         checks.expect(
             ClickCentral.reconnectInterval <= 1,
-            "a link that goes with the reset is back in about a second"
+            "the link is asked for within a second of a reset, so the ask is never the delay"
         )
         checks.expect(
             ClickCentral.resetDropWindow > ClickCentral.restartDelay,
@@ -257,6 +257,20 @@ func runZwiftChecks(_ checks: Checks) {
         checks.equal(security?.connection, "active", "the secure connection state comes back")
         checks.equal(security?.window, "open", "so does the pairing window")
         checks.expect(security?.isActive == true, "and it reads as paired")
+
+        // What the puck here actually answered the security request with: the id
+        // and nothing else, because every field is at its protocol default. It is a
+        // real reading — not paired, no window — and not a missing answer.
+        let unpaired = ZwiftDataObject.split(answer: [0x08, 0x40])
+            .flatMap(ZwiftSecurityStatus.decode)
+        checks.equal(unpaired?.connection, "none", "an empty security answer means the default: not paired")
+        checks.equal(unpaired?.window, "closed", "and no pairing window open")
+        checks.expect(unpaired?.isActive == false, "which is the flashing LED on the puck")
+
+        checks.expect(
+            !(battery?.summary ?? "").contains("to full"),
+            "a puck that is not charging is not told how long a charge would take"
+        )
 
         let notBattery = ZwiftDataObject.split(answer: [0x08, 0x00, 0x12, 0x02, 0x0A, 0x00])
         checks.expect(

@@ -571,9 +571,10 @@ extension ClickCentral: CBCentralManagerDelegate {
         // held, retrying by handle is how it comes back without a rescan.
         if keepsPuckAwake {
             startReconnecting()
-            // Ask again at once instead of waiting out the first tick: a rebooted
-            // puck is advertising again a moment later, and that moment is the
-            // whole cost of a reset.
+            // Ask again at once instead of waiting out the first tick. What a reset
+            // actually costs is the puck's own reboot — measured at 2.3 s from drop
+            // to session, the same whether the retry was immediate or a tick away —
+            // so this only makes sure the ask is never the delay.
             retryConnection()
         } else {
             stopReconnecting()
