@@ -155,7 +155,6 @@ do {
 log.rule("GearUp Probe")
 log.line("Date: \(Date())")
 log.line("Log: \(log.fileURL.path)")
-log.line("Scan window: \(options.scanSeconds)s")
 if let connectID = options.connectID {
     log.line("Target: \(connectID.uuidString)")
 }
@@ -236,6 +235,8 @@ central.onEvent = { event in
     switch event {
     case .state(let state):
         log.line("Bluetooth state: \(state.rawValue)")
+        // The scan window starts when the radio does, not when the process did.
+        if state == .poweredOn { armScanDeadline() }
 
     case .discovered(let device):
         candidates[device.id] = device
@@ -334,41 +335,61 @@ central.onEvent = { event in
 
 central.startScan()
 
+// A backstop for the case where the radio never comes up at all: without it a run
+// with Bluetooth unavailable would sit there rather than say so.
+DispatchQueue.main.asyncAfter(deadline: .now() + options.scanSeconds + 20) {
+    armScanDeadline()
+}
+
 // MARK: - Scan deadline
 
-DispatchQueue.main.asyncAfter(deadline: .now() + options.scanSeconds) {
-    guard !didFinishScan else { return }
-    didFinishScan = true
-    central.stopScan()
+/// Arms the scan window, once, from the moment the radio is actually up.
+///
+/// It used to be armed at launch, which spent the first seconds of it waiting for
+/// Bluetooth to come up: a `--seconds 10` run that took 2.7 s to power the radio
+/// listened for 7.8 s, and a puck woken a second late was never seen.
+var didArmScanDeadline = false
 
-    if let connectID = options.connectID {
-        guard candidates[connectID] != nil else {
-            log.line("The requested peripheral was not seen during the scan.")
-            log.line("Try --all to list every device, then pass --connect <uuid>.")
+func armScanDeadline() {
+    guard !didArmScanDeadline else { return }
+    didArmScanDeadline = true
+    log.line("Scan window: \(options.scanSeconds)s — starting now that Bluetooth is up.")
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + options.scanSeconds) {
+        guard !didFinishScan else { return }
+        didFinishScan = true
+        central.stopScan()
+
+        if let connectID = options.connectID {
+            guard candidates[connectID] != nil else {
+                log.line("The requested peripheral was not seen during the scan.")
+                log.line("Try --all to list every device, then pass --connect <uuid>.")
+                log.close()
+                exit(2)
+            }
+            central.connect(to: connectID)
+            return
+        }
+
+        guard let best = chooseCandidate(from: Array(candidates.values)) else {
+            log.rule()
+            log.line("No Zwift controller found.")
+            log.line("Checklist:")
+            log.line("  • The puck is awake and advertising (press a button: the LED should blink).")
+            log.line("  • Keep pressing while the window runs: a sleeping puck advertises nothing.")
+            log.line("  • It is not connected to Zwift, Companion or another device.")
+            log.line("  • Bluetooth is on and GearUp Probe has permission.")
+            log.line("  • Run again with --all to list every nearby device.")
             log.close()
             exit(2)
         }
-        central.connect(to: connectID)
-        return
-    }
 
-    guard let best = chooseCandidate(from: Array(candidates.values)) else {
-        log.rule()
-        log.line("No Zwift controller found.")
-        log.line("Checklist:")
-        log.line("  • The puck is awake (press a button, LED should blink).")
-        log.line("  • It is not connected to Zwift, Companion or another device.")
-        log.line("  • Bluetooth is on and GearUp Probe has permission.")
-        log.line("  • Run again with --all to list every nearby device.")
-        log.close()
-        exit(2)
-    }
+        log.line("Selected target: \(best.summary)")
+        central.connect(to: best.id)
 
-    log.line("Selected target: \(best.summary)")
-    central.connect(to: best.id)
-
-    if options.skipHandshake {
-        log.line("(--no-handshake given: waiting for notifications without sending the start command)")
+        if options.skipHandshake {
+            log.line("(--no-handshake given: waiting for notifications without sending the start command)")
+        }
     }
 }
 

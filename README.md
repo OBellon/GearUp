@@ -190,7 +190,11 @@ Options:
 
 1. Make sure the puck is **not** connected to Zwift, the Zwift Companion app or
    anything else. A connected puck stops advertising and will not be found.
-2. Press a button on the puck so it wakes up.
+2. **Press a button on the puck again and again while the scan window runs.** A
+   sleeping puck advertises nothing, so a single press before launching can be
+   spent before the radio is even up: keep pressing until the transcript says
+   *"Connected to …"*. (The window is counted from the moment Bluetooth comes up,
+   not from the launch, so it is all listening time.)
 3. Run the probe and, once the handshake line appears, press the buttons **one at
    a time, about a second apart**, in this order: `Y`, `Z`, `A`, `B`, `+`.
 4. Press `Ctrl-C` and share the log file.
