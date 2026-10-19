@@ -258,6 +258,17 @@ bridge, documents the same wall and its workaround is to pair the pucks in the
 official Zwift app for about three minutes before handing them over, which is
 the "opening Zwift first" that riders notice.
 
+**That blinking blue while GearUp is using the puck is the puck's own state
+machine, not a fault.** Its `BleSecurityPage` reports a `secureConnectionStatus`
+and a window in which pairing is allowed, and the `02 03` it answers the `RideOn`
+handshake with is opcode 2, `BLE_SECURITY_REQUEST` — the controller wants a *paired*
+connection before it counts itself in-session, and the LED is what shows the
+difference. Nothing in the published protocol touches the LED (the reference's only
+LED code draws a picture for a different device), and macOS CoreBluetooth has no API
+to start that pairing, so a third-party bridge leaves the puck showing "ready to
+pair" for as long as it is connected. The LED does go out when the puck sleeps,
+which GearUp lets it do whenever there is nothing to shift for.
+
 **A reset is what puts the window back — and a reset is a reboot.** BikeControl's
 own stub for its Click logic says it *"drives the periodic RESET recovery"*, and a
 command frame on this protocol is just `[opcode, ...payload]` — no header — so
