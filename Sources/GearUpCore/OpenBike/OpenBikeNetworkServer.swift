@@ -37,6 +37,14 @@ public final class OpenBikeNetworkServer: OpenBikeTransport {
     private var decoder = OpenBikeCodec.StreamDecoder()
     private var isStopping = false
 
+    /// Unknown message types already reported for the connection in progress.
+    ///
+    /// MyWhoosh sends a lone `0x00` byte every few seconds as a keep-alive. The
+    /// protocol has no message of that type — the reference implementation
+    /// prints it and carries on — so the first one per type is noted and the
+    /// rest are muted rather than filling the log every four seconds.
+    private var reportedUnknownTypes: Set<UInt8> = []
+
     public init() {}
 
     // MARK: - Lifecycle
@@ -60,6 +68,7 @@ public final class OpenBikeNetworkServer: OpenBikeTransport {
         peer = nil
         appInfo = nil
         decoder.reset()
+        reportedUnknownTypes.removeAll()
         port = nil
         status = .off
     }
@@ -158,6 +167,7 @@ public final class OpenBikeNetworkServer: OpenBikeTransport {
         }
 
         decoder.reset()
+        reportedUnknownTypes.removeAll()
         appInfo = nil
         self.connection = connection
 
@@ -168,7 +178,8 @@ public final class OpenBikeNetworkServer: OpenBikeTransport {
                 let peer = Self.describe(connection.endpoint)
                 self.peer = peer
                 self.status = .connected(peer: peer)
-                self.log("\(peer) connected.")
+                // The delegate reports the connection, with the transport's name
+                // on it, so the transport itself stays quiet here.
                 self.delegate?.transport(self, didConnect: peer)
                 self.receive(on: connection)
             case .failed(let error):
@@ -213,9 +224,9 @@ public final class OpenBikeNetworkServer: OpenBikeTransport {
         self.peer = nil
         self.appInfo = nil
         decoder.reset()
+        reportedUnknownTypes.removeAll()
 
         if let peer, !isStopping {
-            log("\(peer) disconnected.")
             delegate?.transport(self, didDisconnect: peer)
         }
         if listener != nil, !isStopping {
@@ -246,7 +257,9 @@ public final class OpenBikeNetworkServer: OpenBikeTransport {
             log("Ignoring button state sent by the app: \(description)")
 
         case .unknown(let type, let payload):
-            log(String(format: "Ignoring unknown message 0x%02X %@", type, payload.hexString), level: .warning)
+            guard reportedUnknownTypes.insert(type).inserted else { return }
+            let hex = String(format: "0x%02X", type)
+            log("Ignoring unknown message \(hex) \(payload.hexString) (repeats on this connection are muted).")
         }
     }
 

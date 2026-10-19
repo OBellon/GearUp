@@ -155,7 +155,8 @@ func runShiftRouterChecks(_ checks: Checks) {
 func runSettingsChecks(_ checks: Checks) {
     checks.group("Settings defaults") {
         let settings = GearUpSettings.default
-        checks.equal(settings.gearCount, 12, "the default is 12 gears")
+        checks.equal(settings.gearCount, 30, "the default readout matches MyWhoosh at 30 gears")
+        checks.equal(settings.startingGear, 15, "the default starting gear is 15")
         checks.equal(settings.transportMode, .both, "both transports are offered by default")
         checks.equal(settings.showInMenuBar, true, "the menu bar extra is on by default")
         checks.equal(settings.shiftUpButton, .shiftUpRight, "the default shift-up button is +")
@@ -166,6 +167,15 @@ func runSettingsChecks(_ checks: Checks) {
     checks.group("Settings clamping") {
         checks.equal(GearUpSettings(gearCount: 0).gearCount, 1, "gear count cannot go below 1")
         checks.equal(GearUpSettings(gearCount: 99).gearCount, 30, "gear count cannot go above 30")
+        checks.equal(
+            GearUpSettings(gearCount: 5, startingGear: 15).startingGear,
+            5,
+            "the starting gear cannot sit above the gear count"
+        )
+
+        var narrowing = GearUpSettings()
+        narrowing.gearCount = 10
+        checks.equal(narrowing.startingGear, 10, "narrowing the range brings the starting gear down with it")
     }
 
     checks.group("Settings persistence") {
@@ -188,6 +198,35 @@ func runSettingsChecks(_ checks: Checks) {
         let reloaded = SettingsStore(defaults: defaults).load()
         checks.equal(reloaded, settings, "settings survive a round trip through UserDefaults")
         checks.equal(reloaded.shiftUpButton, .y, "a remapped shift-up button survives")
+
+        // A blob written before the readout moved to MyWhoosh's 30 gears has no
+        // `startingGear` key at all. Its gear count must move to the new default
+        // while every other preference survives.
+        var beforeThirtyGears = GearUpSettings.default
+        beforeThirtyGears.transportMode = .network
+        beforeThirtyGears.showInMenuBar = false
+        beforeThirtyGears.shiftUpButton = .y
+
+        if let encoded = try? JSONEncoder().encode(beforeThirtyGears),
+           let parsed = try? JSONSerialization.jsonObject(with: encoded),
+           var object = parsed as? [String: Any] {
+            object["gearCount"] = 12
+            object.removeValue(forKey: "startingGear")
+
+            if let legacyBlob = try? JSONSerialization.data(withJSONObject: object) {
+                defaults.set(legacyBlob, forKey: "gearup.settings")
+                let migrated = store.load()
+                checks.equal(migrated.gearCount, 30, "a 12-gear blob moves to the new 30-gear default")
+                checks.equal(migrated.startingGear, 15, "a migrated blob starts in gear 15")
+                checks.equal(migrated.transportMode, .network, "a migrated blob keeps its transport")
+                checks.equal(migrated.showInMenuBar, false, "a migrated blob keeps its menu bar choice")
+                checks.equal(migrated.shiftUpButton, .y, "a migrated blob keeps its button map")
+            } else {
+                checks.expect(false, "could not re-encode a pre-30-gear settings blob")
+            }
+        } else {
+            checks.expect(false, "could not build a pre-30-gear settings blob")
+        }
 
         defaults.set(Data("not json".utf8), forKey: "gearup.settings")
         checks.equal(store.load(), .default, "corrupt settings fall back to the defaults")

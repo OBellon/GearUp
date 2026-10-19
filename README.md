@@ -21,8 +21,8 @@ Phase 1 — the bridge is wired up end to end.
 | Phase | Content | State |
 | --- | --- | --- |
 | 0 | Repo, core codecs, `gearup-probe` diagnostic | ✅ protocol verified on hardware |
-| 1 | App shell, Click V2 connection, OBC transport, shifting | 🚧 in progress |
-| 2 | Settings: gear range, button mapping | ⏳ planned |
+| 1 | App shell, Click V2 connection, OBC transport, shifting, gear readout | 🚧 in progress |
+| 2 | Settings: button mapping and the rest of the options | ⏳ planned |
 | 3 | Both pucks, icon and DMG | ⏳ planned |
 
 Only the **right Click V2 puck** is supported at the start. The architecture keeps
@@ -195,6 +195,15 @@ An idle controller reports `0x0FFFFFFF`.
 2. Go to **Device Connection** and tap the **OpenBikeControl** icon in the top
    right corner.
 3. Accept the pairing popup. MyWhoosh then drives shifting through GearUp.
+4. **There is nothing else to connect for the gear.** MyWhoosh's own virtual
+   shifting (MyShift) owns the gear *and* the trainer: it has 30 gears, starts
+   every ride in gear 15, and shows the current one at the **bottom right of the
+   ride HUD**. GearUp's readout defaults to the same 30 gears starting at 15 so
+   the two numbers agree, and `Reset gear` returns it to 15.
+5. Start a ride — MyWhoosh needs a trainer (or Speed Sensor Mode with a speed
+   sensor) to let you in, so without one there is no HUD to show a gear in and
+   nothing for a shift to change. The resistance comes from the trainer, which
+   MyWhoosh controls; GearUp never touches it.
 
 GearUp advertises the OpenBikeControl service `d273f680-d548-419d-b9d1-fa0472345229`
 over BLE and over mDNS (`_openbikecontrol._tcp`) plus TCP.
@@ -211,6 +220,13 @@ OpenBikeControl messages:
 | App info (app → controller) | `0x04`, `version`, `appIDLen`, `appID`, `appVerLen`, `appVer`, `buttonCount`, `buttonIDs` |
 
 Shift buttons: `0x01` = Shift Up, `0x02` = Shift Down.
+
+The protocol carries **button presses only**: there is no message for
+resistance, power, gear ratios or the trainer itself. That is why GearUp never
+connects to a trainer — it is a controller, and MyWhoosh keeps ownership of both
+the trainer and the gear. MyWhoosh also sends a lone `0x00` byte every few
+seconds as a keep-alive; that is not a protocol message, and GearUp notes the
+first one per connection and then ignores it.
 
 Zwift Click V2 (for the probe): service `FC82`/`00000001-19CA-4651-86E5-FA29DCDD09D1`,
 handshake `RideOn` + `[0x02, 0x03]`, keypad reports as protobuf `RideKeyPadStatus`

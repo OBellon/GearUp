@@ -14,6 +14,17 @@ struct SettingsView: View {
                 Stepper(value: $controller.settings.gearCount, in: 1...30) {
                     Text("Gears in the readout: \(controller.settings.gearCount)")
                 }
+                Stepper(value: $controller.settings.startingGear, in: 1...controller.settings.gearCount) {
+                    Text("Starting gear: \(controller.settings.startingGear)")
+                }
+                Text(
+                    """
+                    MyWhoosh's own shifting has 30 gears and starts every ride in gear 15, so the \
+                    readout mirrors that. The gear MyWhoosh shows in the ride HUD is the one that counts.
+                    """
+                )
+                .font(.caption)
+                .foregroundStyle(.tertiary)
                 LabeledContent("Button map") {
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("\(controller.settings.shiftUpButton.name)  →  Shift Up")

@@ -7,8 +7,21 @@ import Foundation
 /// whole value whenever it changes.
 public struct GearUpSettings: Equatable, Codable {
     /// Gears in the local readout. MyWhoosh owns the trainer's resistance and
-    /// shows its own gear, so this only drives GearUp's display.
-    public var gearCount: Int
+    /// shows its own gear, so this only drives GearUp's display. The default is
+    /// MyWhoosh's own gear count, so the two numbers agree.
+    public var gearCount: Int {
+        didSet {
+            gearCount = min(max(gearCount, Drivetrain.supportedGearRange.lowerBound), Drivetrain.supportedGearRange.upperBound)
+            startingGear = min(startingGear, gearCount)
+        }
+    }
+    /// The gear the readout starts in, and the gear `resetGear()` returns to.
+    /// MyWhoosh starts every ride in the middle of its cassette.
+    public var startingGear: Int {
+        didSet {
+            startingGear = min(max(startingGear, 1), gearCount)
+        }
+    }
     /// Which OpenBikeControl transports to offer MyWhoosh.
     public var transportMode: TransportMode
     public var showInMenuBar: Bool
@@ -16,17 +29,55 @@ public struct GearUpSettings: Equatable, Codable {
     public var shiftDownButton: RideButtonMask
 
     public init(
-        gearCount: Int = 12,
+        gearCount: Int = Drivetrain.defaultGearCount,
+        startingGear: Int = Drivetrain.defaultStartingGear,
         transportMode: TransportMode = .both,
         showInMenuBar: Bool = true,
         shiftUpButton: RideButtonMask = .shiftUpRight,
         shiftDownButton: RideButtonMask = .b
     ) {
-        self.gearCount = min(max(gearCount, 1), 30)
+        // Property observers do not run during initialisation, so the same
+        // clamping the observers do is applied here by hand.
+        let clampedCount = min(
+            max(gearCount, Drivetrain.supportedGearRange.lowerBound),
+            Drivetrain.supportedGearRange.upperBound
+        )
+        self.gearCount = clampedCount
+        self.startingGear = min(max(startingGear, 1), clampedCount)
         self.transportMode = transportMode
         self.showInMenuBar = showInMenuBar
         self.shiftUpButton = shiftUpButton
         self.shiftDownButton = shiftDownButton
+    }
+
+    /// Decoding is deliberately tolerant, with one migration.
+    ///
+    /// The shape changed when the readout moved from 12 gears to MyWhoosh's 30,
+    /// so a blob written before that has no `startingGear` key. Its `gearCount`
+    /// was almost always the old default rather than a deliberate choice, so the
+    /// two gear fields take the new defaults while every other preference —
+    /// transport, menu bar, button map — is kept. Anything unreadable falls back
+    /// to its own default rather than discarding the whole blob.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let storedGearCount = try container.decodeIfPresent(Int.self, forKey: .gearCount)
+        let storedStartingGear = try container.decodeIfPresent(Int.self, forKey: .startingGear)
+        let transportMode = try container.decodeIfPresent(TransportMode.self, forKey: .transportMode)
+        let showInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showInMenuBar)
+        let shiftUpButton = try container.decodeIfPresent(RideButtonMask.self, forKey: .shiftUpButton)
+        let shiftDownButton = try container.decodeIfPresent(RideButtonMask.self, forKey: .shiftDownButton)
+        let writtenBeforeThirtyGears = storedStartingGear == nil
+
+        self.init(
+            gearCount: writtenBeforeThirtyGears
+                ? Drivetrain.defaultGearCount
+                : (storedGearCount ?? Drivetrain.defaultGearCount),
+            startingGear: storedStartingGear ?? Drivetrain.defaultStartingGear,
+            transportMode: transportMode ?? .both,
+            showInMenuBar: showInMenuBar ?? true,
+            shiftUpButton: shiftUpButton ?? .shiftUpRight,
+            shiftDownButton: shiftDownButton ?? .b
+        )
     }
 
     public var buttonMap: ButtonMap {

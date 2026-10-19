@@ -6,13 +6,25 @@ import Foundation
 /// GearUp is not the source of truth for the gear a trainer app is actually in
 /// (the app owns that), so this is a display-side model. It is intentionally
 /// simple and fully unit-tested.
+///
+/// The defaults mirror MyWhoosh's own shifting (MyShift), which offers 30 gears
+/// and starts a ride in gear 15, so the number here agrees with the readout on
+/// the ride HUD instead of drifting away from it.
 public struct Drivetrain: Equatable {
     public static let supportedGearRange = 1...30
+
+    /// MyWhoosh's MyShift gear count, and so GearUp's default readout.
+    public static let defaultGearCount = 30
+    /// MyWhoosh starts every ride in the middle of the cassette.
+    public static let defaultStartingGear = 15
 
     public private(set) var gearCount: Int
     public private(set) var currentGear: Int
 
-    public init(gearCount: Int = 12, currentGear: Int = 1) {
+    public init(
+        gearCount: Int = Drivetrain.defaultGearCount,
+        currentGear: Int = Drivetrain.defaultStartingGear
+    ) {
         let clampedCount = min(max(gearCount, Self.supportedGearRange.lowerBound), Self.supportedGearRange.upperBound)
         self.gearCount = clampedCount
         self.currentGear = min(max(currentGear, 1), clampedCount)
@@ -39,7 +51,7 @@ public struct Drivetrain: Equatable {
         self = Drivetrain(gearCount: count, currentGear: currentGear)
     }
 
-    public mutating func reset(to gear: Int = 1) {
+    public mutating func reset(to gear: Int = Drivetrain.defaultStartingGear) {
         currentGear = min(max(gear, 1), gearCount)
     }
 }

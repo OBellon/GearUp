@@ -113,6 +113,9 @@ public final class GearUpController: ObservableObject {
                 gear.setGearCount(settings.gearCount)
                 log.add("Gear readout set to \(gear.gearCount) gears.")
             }
+            if settings.startingGear != oldValue.startingGear {
+                log.add("Starting gear set to \(settings.startingGear).")
+            }
             if settings.transportMode != oldValue.transportMode {
                 log.add("Transport changed to \(settings.transportMode.title).")
                 applyTransportMode()
@@ -166,7 +169,7 @@ public final class GearUpController: ObservableObject {
         self.store = store
         let settings = store.load()
         self.settings = settings
-        self.gear = Drivetrain(gearCount: settings.gearCount)
+        self.gear = Drivetrain(gearCount: settings.gearCount, currentGear: settings.startingGear)
         self.router = ShiftRouter(buttonMap: settings.buttonMap)
 
         router.onShift = { [weak self] action, _ in
@@ -192,6 +195,7 @@ public final class GearUpController: ObservableObject {
         ]
 
         log.add("GearUp ready. Button map: \(settings.shiftUpButton.name) shifts up, \(settings.shiftDownButton.name) shifts down.")
+        log.add("Readout: \(gear.gearCount) gears, starting at \(gear.currentGear).")
         log.add("Looking for a Zwift Click V2 (right puck).", level: .info)
     }
 
@@ -253,9 +257,10 @@ public final class GearUpController: ObservableObject {
         for transport in connected { transport.sendTap(for: action) }
     }
 
-    /// Puts the local gear readout back to 1, e.g. after a restart.
+    /// Puts the local gear readout back to the configured starting gear — where
+    /// a fresh MyWhoosh ride begins — e.g. after a restart.
     public func resetGear() {
-        gear.reset(to: 1)
+        gear.reset(to: settings.startingGear)
         log.add("Gear readout reset to \(gear.currentGear).")
     }
 

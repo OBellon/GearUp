@@ -2,6 +2,13 @@ import GearUpCore
 
 func runDrivetrainChecks(_ checks: Checks) {
     checks.group("Drivetrain") {
+        checks.equal(Drivetrain().gearCount, 30, "the default readout has MyWhoosh's 30 gears")
+        checks.equal(Drivetrain().currentGear, 15, "the default readout starts in gear 15, like a MyWhoosh ride")
+
+        var defaultReset = Drivetrain(gearCount: 30, currentGear: 3)
+        defaultReset.reset()
+        checks.equal(defaultReset.currentGear, 15, "an argument-less reset goes back to the starting gear")
+
         checks.equal(Drivetrain(gearCount: 12, currentGear: 1).currentGear, 1, "the starting gear is kept")
         checks.equal(Drivetrain(gearCount: 12, currentGear: 99).currentGear, 12, "a too-high gear is clamped")
         checks.equal(Drivetrain(gearCount: 999, currentGear: 1).gearCount, 30, "the gear count is capped")

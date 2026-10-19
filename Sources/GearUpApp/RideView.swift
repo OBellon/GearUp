@@ -83,7 +83,7 @@ struct RideView: View {
                         Label("Shift Down", systemImage: "chevron.down")
                             .frame(maxWidth: .infinity)
                     }
-                    Button("Reset gear to 1") {
+                    Button("Reset gear to \(controller.settings.startingGear)") {
                         controller.resetGear()
                     }
                     .buttonStyle(.link)
@@ -184,9 +184,10 @@ struct RideView: View {
                         .font(.callout.weight(.medium))
                     Text(
                         """
-                        Enable Virtual Shifting in MyWhoosh, then open Device Connection and pick the \
-                        OpenBikeControl device. Accept the popup and the gear indicator in MyWhoosh will \
-                        follow the puck.
+                        GearUp only sends shift presses. MyWhoosh keeps the gear and the trainer's \
+                        resistance, so enable Virtual Shifting and pick the OpenBikeControl device on \
+                        its Device Connection screen. Start a ride and MyWhoosh's gear — bottom right \
+                        of the ride HUD, 30 gears, starting at 15 — follows the puck.
                         """
                     )
                     .font(.callout)
