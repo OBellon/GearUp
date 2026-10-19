@@ -144,6 +144,9 @@ public final class ClickCentral: NSObject {
     /// When the reset command was last written. A reset reboots the puck, so the
     /// disconnect that follows one is GearUp's own doing and says so.
     private var lastResetSentAt: Date?
+    /// When the battery was last asked about, so the watch can keep a ride's worth
+    /// of readings apart rather than asking on every tick.
+    private var lastBatteryAskedAt = Date.distantPast
     private var resetsSent = 0
 
     /// When true, every discovered peripheral is reported, not just Zwift ones.
@@ -209,6 +212,17 @@ public final class ClickCentral: NSObject {
 
     /// Every how many resets the log says so — ten minutes' worth of quiet.
     public static let resetHeartbeat = 15
+
+    /// How often the held puck is also asked about its battery.
+    ///
+    /// The battery is answered as a forecast — minutes left at the drain of the
+    /// moment — and the part of it that is a measurement is the percentage. That
+    /// percentage only says anything over hours, so a ride has to leave a series
+    /// of readings behind rather than one at the start: this is the series. It is
+    /// one four-byte read every five minutes while GearUp is holding the link, and
+    /// a `Get` does not extend the puck's own window (the Info-Request sent every
+    /// 5 s proved that much), so it costs nothing but the bytes.
+    public static let batteryInterval: TimeInterval = 300
 
     /// What a reset writes. Replaceable so the probe can try a reset procedure
     /// other than the bare reboot.
@@ -305,6 +319,7 @@ public final class ClickCentral: NSObject {
         }
         didSendHandshake = true
         lastActivity = Date()
+        lastBatteryAskedAt = Date()
         onEvent?(.handshakeSent(command))
         // A link that just came up is a link worth keeping up, and its handshake
         // opens a fresh window of its own.
@@ -339,8 +354,21 @@ public final class ClickCentral: NSObject {
     /// the puck would otherwise fall asleep and need a press to come back.
     private func watchIdlePuck() {
         guard keepsPuckAwake, isConnected else { return }
+        askForBatteryIfDue()
         guard Date().timeIntervalSince(lastActivity) >= idleResetThreshold else { return }
         resetPuck()
+    }
+
+    /// Asks the puck for its battery, no more often than `batteryInterval`.
+    ///
+    /// A read, not a keep-awake: it goes out while the puck is held so that a long
+    /// ride leaves a battery trend in the log, and the answer comes back as a data
+    /// object like any other.
+    private func askForBatteryIfDue() {
+        guard let peripheral = target, let syncRxCharacteristic else { return }
+        guard Date().timeIntervalSince(lastBatteryAskedAt) >= Self.batteryInterval else { return }
+        lastBatteryAskedAt = Date()
+        peripheral.writeValue(Data(ZwiftClickCodec.batteryRequest), for: syncRxCharacteristic, type: .withoutResponse)
     }
 
     /// Resets the puck, then starts it again.

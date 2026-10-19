@@ -496,15 +496,29 @@ public struct ZwiftBatteryStatus: Equatable {
         }
     }
 
+    /// A forecast as words: minutes under the hour, whole hours above it.
+    ///
+    /// The estimate is recomputed from the drain of the moment and moves in steps
+    /// — on the puck here it sat at 2863, then 2797 twice, then 2773 twice, while
+    /// the level never left 90% — so quoting it to the minute invites it to be read
+    /// as a countdown, which it is not. Above an hour the minutes are noise anyway:
+    /// 2773 is "about 46 h".
+    public static func duration(_ minutes: Int) -> String {
+        guard minutes >= 60 else { return "\(minutes) min" }
+        return "\(Int((Double(minutes) / 60).rounded())) h"
+    }
+
     public var summary: String {
         var parts: [String] = []
         if let level { parts.append("\(level)%") }
         if let charging { parts.append(charging) }
-        if let minutesToEmpty { parts.append("about \(minutesToEmpty) min left") }
+        if let minutesToEmpty {
+            parts.append("about \(ZwiftBatteryStatus.duration(minutesToEmpty)) left")
+        }
         // The controller reports a "to full" estimate even while it is not charging,
         // where it reads as a meaningless zero.
         if charging == "charging", let minutesToFull {
-            parts.append("about \(minutesToFull) min to full")
+            parts.append("about \(ZwiftBatteryStatus.duration(minutesToFull)) to full")
         }
         return parts.isEmpty ? "no reading" : parts.joined(separator: ", ")
     }

@@ -233,6 +233,10 @@ func runZwiftChecks(_ checks: Checks) {
             [0x00, 0x08, 0x40],
             "the BLE security page 64 encodes as 40"
         )
+        checks.expect(
+            ClickCentral.batteryInterval >= 60 && ClickCentral.batteryInterval <= 900,
+            "a held puck is asked about its battery, but only a few times an hour"
+        )
     }
 
     checks.group("Click V2 data objects") {
@@ -249,6 +253,21 @@ func runZwiftChecks(_ checks: Checks) {
         checks.expect(
             (battery?.summary ?? "").hasPrefix("78%"),
             "the summary leads with the level"
+        )
+        checks.equal(
+            ZwiftBatteryStatus.duration(45),
+            "45 min",
+            "a forecast under the hour is quoted in minutes"
+        )
+        checks.equal(
+            ZwiftBatteryStatus.duration(240),
+            "4 h",
+            "and above it in whole hours, so a forecast is not read as a countdown"
+        )
+        checks.equal(
+            ZwiftBatteryStatus.duration(2773),
+            "46 h",
+            "which is what the puck's own reading on the bench reads as"
         )
 
         let security = ZwiftDataObject.split(answer: [

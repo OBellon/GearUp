@@ -325,6 +325,24 @@ at the same time (object 771), and it is the only way to know it: the controller
 never sent a battery notification, in any log GearUp has. What it answers with —
 level, charging state, minutes left — is what the app shows beside the puck's name.
 
+**Which part of that answer is a measurement, and which is a forecast, matters.**
+The percentage is the measurement. The "time to empty" is recomputed from the drain
+of the moment, and it moves in steps rather than counting down: on the bench here it
+read 2863, then 2797 twice, then 2773 twice, across four minutes of continuous
+connection, while the level never left 90% once. Read as a countdown, those numbers
+would mean the puck was flat within two hours of that reading — and it went on
+answering. So the log now quotes anything above an hour in whole hours, where 2773
+is "about 46 h" and does not read like a stopwatch. Zwift's own figure for the same
+puck is **over 100 hours** on a CR2032, so an hour's ride is worth about a percent,
+and the expensive case is a stress test that reconnects it every minute for an
+afternoon, not riding.
+
+To make the drain a measurement rather than an argument, a held puck is asked about
+its battery every five minutes (`ClickCentral.batteryInterval`), so a ride leaves a
+series of percentages in the log instead of one reading at the start. That series is
+what to compare, and a `Get` does not lengthen the puck's own window, so it costs
+the four bytes it is.
+
 Nothing in the published protocol switches the sleep off: the opcodes cover
 firmware, battery, the trainer and powering *off*, and the data objects the device
 info, the date and time, input config and the like. So GearUp does what BikeControl
@@ -339,6 +357,12 @@ nobody is using, so the rest of the time the puck is left alone to power down on
 its own minute. While it is held, GearUp also retries a dropped link by handle —
 CoreBluetooth introduces a peripheral once, so a rescan cannot turn up a puck it
 has already seen.
+
+What the hold adds to a Zwift session is the reset, not the link: the radio is up
+in both. A press opens the puck's window by itself, so a rider who is shifting is
+never reset — the watch only ever reboots a puck that has been quiet for 40
+seconds — and the resets in the log are therefore the price of quiet spells, not
+of a ride.
 
 ### Confirmed Click V2 button map
 
