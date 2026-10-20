@@ -18,7 +18,7 @@ APP_PATH=".build/GearUp.app"
 echo "==> Building GearUp ($CONFIGURATION)"
 swift build -c "$CONFIGURATION" --product GearUp
 
-package_bundle GearUp "$APP_PATH" "scripts/AppInfo.plist" "$CONFIGURATION" "$(gearup_sign_identity)"
+package_bundle GearUp "$APP_PATH" "scripts/AppInfo.plist" "$CONFIGURATION" "$(gearup_sign_identity)" "Resources/GearUp.icns"
 
 echo "==> Done: $APP_PATH"
 echo "    Open it with: open $APP_PATH"

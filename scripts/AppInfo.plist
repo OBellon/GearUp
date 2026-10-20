@@ -14,6 +14,8 @@
 	<string>GearUp</string>
 	<key>CFBundleDisplayName</key>
 	<string>GearUp</string>
+	<key>CFBundleIconFile</key>
+	<string>GearUp</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

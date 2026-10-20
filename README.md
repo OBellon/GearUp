@@ -48,7 +48,9 @@ Sources/
   GearUpApp/         SwiftUI app (assembled into GearUp.app)
   GearUpProbe/       Phase 0 diagnostic CLI
   GearUpChecks/      Unit checks (a tiny runner, since XCTest needs Xcode)
-scripts/             App bundle assembly, Info.plist templates
+scripts/             App bundle assembly, Info.plist templates, icon renderer
+Resources/           GearUp.icns, packed by `make icon`
+Design/              The chosen icon at 1024 px, for reference
 ```
 
 Everything is built with SwiftPM. There are no third-party dependencies: only
@@ -82,12 +84,32 @@ make test            # same as swift run GearUpChecks
 make signing         # create GearUp's local signing identity (once per Mac)
 make app             # assemble and sign .build/GearUp.app
 make run             # build the app and open it
+make icon            # redraw the app icon (ICON_VARIANT=bike|drivetrain|gear)
 make smoke           # build, open every screen, and check the bridge came up
 ```
 
 > XCTest and swift-testing both ship with Xcode, which GearUp does not require,
 > so the checks live in a small dependency-free runner (`Sources/GearUpChecks`)
 > and exit non-zero when something fails.
+
+### The icon
+
+The icon is drawn, not exported: `scripts/make-icon.swift` renders it with
+CoreGraphics at each size macOS asks for, so the gear teeth stay crisp from 16 px
+in the menu bar to 1024 px in the Dock. The chosen motif is `gear` — a chainring
+with two orange shift chevrons — and the script also carries two alternatives:
+
+```sh
+make icon                          # the chosen motif, into Resources/GearUp.icns
+make icon ICON_VARIANT=bike        # a bicycle with a triple crankset
+make icon ICON_VARIANT=drivetrain  # a chainring, cassette and chain
+```
+
+To look at a motif without touching the bundle:
+
+```sh
+swift scripts/make-icon.swift --preview Design   # all three at 512 px
+```
 
 ### Signing
 

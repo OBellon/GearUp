@@ -6,6 +6,7 @@
 #   make signing — create GearUp's local signing identity (once per Mac)
 #   make app     — assemble and sign .build/GearUp.app
 #   make run     — build the app and open it
+#   make icon    — redraw the app icon and pack Resources/GearUp.icns
 #   make smoke   — launch the app and check that it really came up
 #   make clean   — remove build artefacts
 #
@@ -15,7 +16,11 @@
 
 ARGS ?=
 
-.PHONY: build test probe probe-app signing app run smoke clean lint
+.PHONY: build test probe probe-app signing app run icon smoke clean lint
+
+# The icon is drawn by scripts/make-icon.swift; `make icon ICON_VARIANT=bike`
+# (or drivetrain) swaps the motif.
+ICON_VARIANT ?= gear
 
 build:
 	swift build
@@ -37,6 +42,15 @@ app:
 
 run: app
 	open .build/GearUp.app
+
+# Every size is drawn from the model rather than resampled from one bitmap, so
+# the teeth stay sharp in the Dock and in Finder.
+icon:
+	mkdir -p Resources
+	swift scripts/make-icon.swift --variant $(ICON_VARIANT) --iconset .build/Icon.iconset
+	iconutil -c icns .build/Icon.iconset -o Resources/GearUp.icns
+	swift scripts/make-icon.swift --variant $(ICON_VARIANT) --out Design/icon.png
+	@echo "==> Resources/GearUp.icns from the $(ICON_VARIANT) motif"
 
 smoke:
 	./scripts/smoke.sh $(ARGS)
