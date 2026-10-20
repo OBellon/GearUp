@@ -1,5 +1,6 @@
 import Foundation
 import ApplicationServices
+import AppKit
 import GearUpCore
 
 // MARK: - Shift router
@@ -117,6 +118,40 @@ func runShiftRouterChecks(_ checks: Checks) {
             ButtonAction.allCases.filter { !$0.isShift }.allSatisfy { $0.detail != nil },
             "every Mac action explains itself in the settings screen"
         )
+    }
+
+    checks.group("Away from the ride") {
+        // Workspace notifications are posted on the workspace's own centre, not
+        // on NotificationCenter.default. Listening on the wrong one is why the ⇄
+        // button always went back to the app GearUp was launched from.
+        let switcher = RideAppSwitcher.shared
+        switcher.start()
+
+        let candidate = NSWorkspace.shared.runningApplications.first { app in
+            guard let id = app.bundleIdentifier else { return false }
+            return app.activationPolicy == .regular
+                && id != Bundle.main.bundleIdentifier
+                && !switcher.rideAppBundleIDs.contains(id)
+                && !app.isTerminated
+        }
+
+        if let candidate {
+            NSWorkspace.shared.notificationCenter.post(
+                name: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                userInfo: [NSWorkspace.applicationUserInfoKey: candidate]
+            )
+            // The switcher listens on the main queue, so let it drain before
+            // asking what it learnt.
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            checks.equal(
+                switcher.awayDestinationName,
+                candidate.localizedName,
+                "the workspace's activation notice teaches the switcher where away is"
+            )
+        } else {
+            checks.expect(true, "no other regular app is running, so the workspace notice is not checked")
+        }
     }
 
     checks.group("Button map assignment") {

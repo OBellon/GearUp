@@ -366,7 +366,7 @@ public final class RideAppSwitcher {
         guard !started else { return }
         started = true
 
-        observer = NotificationCenter.default.addObserver(
+        observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
@@ -387,7 +387,9 @@ public final class RideAppSwitcher {
     }
 
     deinit {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let observer {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
     }
 
     private func remember(_ app: NSRunningApplication) {
