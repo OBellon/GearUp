@@ -211,6 +211,7 @@ public final class GearUpController: ObservableObject {
         log.add("GearUp ready. Button map: \(buttonMapSummary).")
         log.add("Readout: \(gear.gearCount) gears, starting at \(gear.currentGear).")
         log.add("Away from MyWhoosh: \(RideAppSwitcher.shared.awayDestinationName ?? "the next desktop").")
+        log.add("Accessibility: \(MacControl.hasAccessibility ? "granted" : "not granted").")
         log.add("Looking for a Zwift Click V2 (right puck).", level: .info)
     }
 

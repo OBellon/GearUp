@@ -1,4 +1,5 @@
 import Foundation
+import ApplicationServices
 import GearUpCore
 
 // MARK: - Shift router
@@ -96,6 +97,21 @@ func runShiftRouterChecks(_ checks: Checks) {
         checks.expect(
             ButtonAction.toggleRideApp.detail?.contains("desktop") == true,
             "the ride-app action says it can change desktop when there is nowhere else to go"
+        )
+        checks.expect(
+            RideAppSwitcher.explanation(activated: false, accessibility: nil, hasAccessibility: true)
+                .contains("refused"),
+            "a refused activation says so"
+        )
+        checks.expect(
+            RideAppSwitcher.explanation(activated: false, accessibility: .success, hasAccessibility: true)
+                .contains("nothing came forward"),
+            "an accepted request that changed nothing says so"
+        )
+        checks.expect(
+            RideAppSwitcher.explanation(activated: false, accessibility: nil, hasAccessibility: false)
+                .contains("Accessibility"),
+            "a missing Accessibility grant is named"
         )
         checks.expect(
             ButtonAction.allCases.filter { !$0.isShift }.allSatisfy { $0.detail != nil },

@@ -423,7 +423,7 @@ public final class RideAppSwitcher {
 
         if inRide {
             if let other = lastOther, !other.isTerminated {
-                bringForward(other, note: note)
+                leave(to: other, note: note)
             } else {
                 MacControl.toggleDesktop(note: note)
             }
@@ -434,29 +434,101 @@ public final class RideAppSwitcher {
             note("MyWhoosh is not running.")
             return
         }
-        bringForward(ride, note: note)
+        returnTo(ride, note: note)
     }
 
-    /// Brings an app forward and says what really happened.
+    /// Leaves the ride for the app the rider was in before.
     ///
-    /// Activation is a request, and this app is usually in the background when it
-    /// makes it. Saying "back to MyWhoosh" before looking would put a lie in the
-    /// log, so the answer is written a moment later, from `isActive`.
-    private func bringForward(_ app: NSRunningApplication, note: @escaping (String) -> Void) {
-        let name = app.localizedName ?? "MyWhoosh"
-        let isRide = app.bundleIdentifier.map(rideAppBundleIDs.contains) ?? false
-        let asked = app.activate()
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.activationSettleTime) {
-            if app.isActive {
+    /// If that app does not take the screen, leaving is still possible the other
+    /// way — a desktop — rather than the press doing nothing.
+    private func leave(to app: NSRunningApplication, note: @escaping (String) -> Void) {
+        let name = app.localizedName ?? "the app"
+        askToComeForward(app) { refusal in
+            guard let refusal else {
+                note("\(name) is in front.")
+                return
+            }
+            note("could not bring \(name) forward (\(refusal)). Changing desktop instead.")
+            MacControl.toggleDesktop(note: note)
+        }
+    }
+
+    private func returnTo(_ ride: NSRunningApplication, note: @escaping (String) -> Void) {
+        let name = ride.localizedName ?? "MyWhoosh"
+        askToComeForward(ride) { refusal in
+            if let refusal {
+                note("could not bring \(name) forward (\(refusal)).")
+            } else {
                 // Reaching the ride by activating it also puts the desktop toggle
                 // back on the ride's desktop, so the next press leaves again.
-                if isRide { MacControl.noteReturnedToRide() }
+                MacControl.noteReturnedToRide()
                 note("\(name) is in front.")
-            } else if asked {
-                note("asked \(name) to come forward, but it did not.")
-            } else {
-                note("macOS refused to bring \(name) forward.")
             }
         }
+    }
+
+    /// Asks an app to come forward and waits to see whether it did.
+    ///
+    /// `activate()` is the ordinary route, but macOS ignores it when the caller is
+    /// not itself the frontmost app — which is GearUp's situation during a ride —
+    /// so the Accessibility route is asked at the same time. Both are only
+    /// requests; the answer comes from the workspace a moment later.
+    ///
+    /// Calls back with nil when the app is in front, or a sentence saying why not.
+    private func askToComeForward(
+        _ app: NSRunningApplication,
+        then: @escaping (String?) -> Void
+    ) {
+        let activated = app.activate()
+        let accessibility = raiseViaAccessibility(app)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.activationSettleTime) { [weak self] in
+            guard let self else { return }
+            guard !self.isInFront(app) else {
+                then(nil)
+                return
+            }
+            then(Self.explanation(
+                activated: activated,
+                accessibility: accessibility,
+                hasAccessibility: MacControl.hasAccessibility
+            ))
+        }
+    }
+
+    /// The honest why, for the log. Pure, so every branch can be checked.
+    public static func explanation(
+        activated: Bool,
+        accessibility: AXError?,
+        hasAccessibility: Bool
+    ) -> String {
+        guard hasAccessibility else {
+            return "macOS refused the request and Accessibility permission is not granted"
+        }
+        if accessibility == .success {
+            return "the system accepted the request but nothing came forward"
+        }
+        if let accessibility {
+            let route = activated ? "activation accepted" : "activation refused"
+            return "\(route), Accessibility error \(accessibility.rawValue)"
+        }
+        return "macOS refused the request"
+    }
+
+    /// Raises an app through Accessibility, which works from the background where
+    /// activation is refused. Returns the system's answer, or nil without the
+    /// grant.
+    private func raiseViaAccessibility(_ app: NSRunningApplication) -> AXError? {
+        guard MacControl.hasAccessibility else { return nil }
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        return AXUIElementSetAttributeValue(
+            element,
+            kAXFrontmostAttribute as CFString,
+            kCFBooleanTrue
+        )
+    }
+
+    private func isInFront(_ app: NSRunningApplication) -> Bool {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
     }
 }
