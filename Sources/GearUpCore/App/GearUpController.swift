@@ -210,6 +210,7 @@ public final class GearUpController: ObservableObject {
 
         log.add("GearUp ready. Button map: \(buttonMapSummary).")
         log.add("Readout: \(gear.gearCount) gears, starting at \(gear.currentGear).")
+        log.add("Away from MyWhoosh: \(RideAppSwitcher.shared.awayDestinationName ?? "the next desktop").")
         log.add("Looking for a Zwift Click V2 (right puck).", level: .info)
     }
 
@@ -258,8 +259,8 @@ public final class GearUpController: ObservableObject {
             // screen's answer is refreshed from the source each time a button
             // asks about it.
             refreshAccessibility()
-            if let note = MacControl.perform(action) {
-                log.add("\(action.title): \(note)")
+            MacControl.perform(action) { [weak self] note in
+                self?.log.add("\(action.title): \(note)")
             }
             return
         }
@@ -332,7 +333,7 @@ public final class GearUpController: ObservableObject {
     /// prompt for it. Binding such a button is the calm moment to ask: the rider
     /// is in the settings screen, not mid-ride.
     public func askForAccessibilityIfNeeded(for action: ButtonAction) {
-        guard action == .nextSpace || action == .previousSpace else { return }
+        guard action.needsAccessibility else { return }
         MacControl.askForAccessibilityOnce()
         refreshAccessibility()
     }

@@ -27,7 +27,7 @@ public enum ButtonAction: String, Codable, CaseIterable {
         case .mute: return "Mute"
         case .nextSpace: return "Next Desktop"
         case .previousSpace: return "Previous Desktop"
-        case .toggleRideApp: return "MyWhoosh ⇄ Last App"
+        case .toggleRideApp: return "MyWhoosh ⇄ Away"
         }
     }
 
@@ -35,6 +35,15 @@ public enum ButtonAction: String, Codable, CaseIterable {
     /// needs no transport at all.
     public var isShift: Bool {
         self == .shiftUp || self == .shiftDown
+    }
+
+    /// Whether the action posts keys or moves windows, which macOS only allows
+    /// with Accessibility permission.
+    public var needsAccessibility: Bool {
+        switch self {
+        case .nextSpace, .previousSpace, .toggleRideApp: return true
+        case .volumeUp, .volumeDown, .mute, .shiftUp, .shiftDown: return false
+        }
     }
 
     /// What the settings screen says under the title, where it helps.
@@ -45,7 +54,7 @@ public enum ButtonAction: String, Codable, CaseIterable {
         case .nextSpace, .previousSpace:
             return "Uses Ctrl+←/→, so it needs Accessibility permission once."
         case .toggleRideApp:
-            return "Switches between MyWhoosh and the app you were in before."
+            return "Back to MyWhoosh, or away from it: the app you were in, or the next desktop when there is none."
         case .shiftUp, .shiftDown:
             return "Sent to MyWhoosh over OpenBikeControl."
         }

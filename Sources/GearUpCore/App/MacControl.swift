@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreAudio
+import CoreGraphics
 
 /// The things a button can do to the Mac itself.
 ///
@@ -22,26 +23,28 @@ public enum MacControl {
     /// One press of a volume button: the same sixteenth the volume keys use.
     public static let volumeStep: Float = 1.0 / 16.0
 
-    /// What one button action does, and what to say about it in the log.
+    /// What one button action does, reporting what happened through `note`.
     ///
-    /// Returns `nil` for actions that are not the Mac's business.
-    @discardableResult
-    public static func perform(_ action: ButtonAction) -> String? {
+    /// Most of it can be said at once. The desktop actions cannot: only the
+    /// system knows whether a switch moved anything, so they answer a moment
+    /// later. What is noted ends up in the log, so it has to be what happened
+    /// rather than what was asked for.
+    public static func perform(_ action: ButtonAction, note: @escaping (String) -> Void) {
         switch action {
         case .volumeUp:
-            return adjustVolume(by: volumeStep)
+            if let said = adjustVolume(by: volumeStep) { note(said) }
         case .volumeDown:
-            return adjustVolume(by: -volumeStep)
+            if let said = adjustVolume(by: -volumeStep) { note(said) }
         case .mute:
-            return toggleMute()
+            if let said = toggleMute() { note(said) }
         case .nextSpace:
-            return switchSpace(forward: true)
+            moveDesktop(forward: true, note: note)
         case .previousSpace:
-            return switchSpace(forward: false)
+            moveDesktop(forward: false, note: note)
         case .toggleRideApp:
-            return RideAppSwitcher.shared.toggle()
+            RideAppSwitcher.shared.toggle(note: note)
         case .shiftUp, .shiftDown:
-            return nil
+            break
         }
     }
 
@@ -150,6 +153,10 @@ public enum MacControl {
 
     // MARK: - Desktops
 
+    /// The wording the settings screen and the log share for a missing grant.
+    public static let accessibilityHint = "changing desktops needs Accessibility permission "
+        + "(System Settings → Privacy & Security → Accessibility)."
+
     public static var hasAccessibility: Bool {
         AXIsProcessTrusted()
     }
@@ -177,37 +184,158 @@ public enum MacControl {
 
     private static var hasAskedForAccessibility = false
 
-    private static func switchSpace(forward: Bool) -> String? {
-        guard hasAccessibility else {
-            // The prompt is the only way to tell a rider what is missing, and it
-            // opens the pane they need.
-            askForAccessibilityOnce()
-            return "changing desktops needs Accessibility permission "
-                + "(System Settings → Privacy & Security → Accessibility)."
-        }
+    /// How long the system gets to finish a desktop switch before GearUp decides
+    /// that nothing moved. The switch itself is quick; this is slack for the
+    /// animation and for the new desktop's windows to be reported.
+    static let desktopSettleTime: TimeInterval = 0.45
 
+    /// Where the away/back toggle last left the rider, and which way it went.
+    ///
+    /// Only the main queue touches these — CoreBluetooth is created with a nil
+    /// queue and every note is posted on main — so they need no lock.
+    private static var isAwayFromRide = false
+    private static var awayWasForward: Bool?
+
+    /// Called when the ride was reached by activating it rather than by moving
+    /// back to its desktop, so the next away press starts from the ride again.
+    static func noteReturnedToRide() {
+        isAwayFromRide = false
+    }
+
+    /// What the current desktop looks like from outside: which processes own the
+    /// windows on screen, and which app is in front.
+    ///
+    /// Window owners are readable without Screen Recording — only titles and
+    /// pixels need that — so this costs no permission. The frontmost app is part
+    /// of the picture because two desktops can hold windows of the same app.
+    private struct VisibleDesktop: Equatable {
+        var owners: Set<pid_t>
+        var frontmost: String?
+    }
+
+    private static func visibleDesktop() -> VisibleDesktop {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        var owners: Set<pid_t> = []
+        if let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] {
+            for window in list {
+                guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
+                      let pid = window[kCGWindowOwnerPID as String] as? pid_t else { continue }
+                owners.insert(pid)
+            }
+        }
+        return VisibleDesktop(
+            owners: owners,
+            frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        )
+    }
+
+    /// Posts one Ctrl+arrow. Returns false when the key could not be posted.
+    private static func postControlArrow(forward: Bool) -> Bool {
         // Mission Control's own defaults: Control with the arrow keys.
         let key: CGKeyCode = forward ? 124 : 123
-        guard let source = CGEventSource(stateID: .hidSystemState) else { return nil }
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
         for isDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: isDown) else {
-                return nil
+                return false
             }
             event.flags = .maskControl
             event.post(tap: .cghidEventTap)
         }
-        return forward ? "next desktop." : "previous desktop."
+        return true
+    }
+
+    /// One desktop move, telling the caller whether it really moved.
+    private static func attemptDesktop(forward: Bool, then: @escaping (Bool) -> Void) {
+        let before = visibleDesktop()
+        guard postControlArrow(forward: forward) else {
+            then(false)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + desktopSettleTime) {
+            then(visibleDesktop() != before)
+        }
+    }
+
+    /// A one-way desktop button, with the truth in the log: a key that was
+    /// posted is not the same thing as a desktop that changed.
+    private static func moveDesktop(forward: Bool, note: @escaping (String) -> Void) {
+        guard hasAccessibility else {
+            // The prompt is the only way to tell a rider what is missing, and it
+            // opens the pane they need.
+            askForAccessibilityOnce()
+            note(accessibilityHint)
+            return
+        }
+        attemptDesktop(forward: forward) { moved in
+            note(moved
+                 ? (forward ? "next desktop." : "previous desktop.")
+                 : "the desktop did not move, so there is no desktop that way.")
+        }
+    }
+
+    /// "Leave the ride and come back", for when there is no app to name.
+    ///
+    /// MyWhoosh goes fullscreen on a desktop of its own, so the rider's other
+    /// windows are a desktop away rather than behind it, and macOS has no public
+    /// "go to desktop N". This is therefore a two-state toggle: the press that
+    /// leaves tries forward first — the ride's desktop is usually the first — and
+    /// falls back to backward when nothing moves, which is the ride-on-the-last-
+    /// desktop case. Whichever direction worked is remembered, so the press that
+    /// comes back goes the other way and lands where the rider left off.
+    static func toggleDesktop(note: @escaping (String) -> Void) {
+        guard hasAccessibility else {
+            askForAccessibilityOnce()
+            note(accessibilityHint)
+            return
+        }
+
+        let goingAway = !isAwayFromRide
+        let forward = goingAway ? (awayWasForward ?? true) : !(awayWasForward ?? true)
+
+        attemptDesktop(forward: forward) { moved in
+            guard !moved else {
+                record(goingAway: goingAway, forward: forward, note: note)
+                return
+            }
+            // Nothing moved: this was the last desktop that way, or the rider
+            // moved by hand. One try the other way, then say so rather than keep
+            // guessing at the rider's layout.
+            attemptDesktop(forward: !forward) { movedTheOtherWay in
+                guard movedTheOtherWay else {
+                    awayWasForward = nil
+                    isAwayFromRide = false
+                    note("the desktop did not move either way, so there may be only one.")
+                    return
+                }
+                record(goingAway: goingAway, forward: !forward, note: note)
+            }
+        }
+    }
+
+    private static func record(goingAway: Bool, forward: Bool, note: @escaping (String) -> Void) {
+        if goingAway { awayWasForward = forward }
+        isAwayFromRide = goingAway
+        if goingAway {
+            note("away from the ride, on the \(forward ? "next" : "previous") desktop.")
+        } else {
+            note("back on the ride's desktop.")
+        }
     }
 }
 
 /// Swaps between the trainer app and whatever else was in front.
 ///
 /// `NSRunningApplication.activate` brings an app's windows forward, and macOS
-/// takes the desktop with them, so this needs no Accessibility grant. What it
-/// does need is a memory of where the rider was before MyWhoosh, because macOS
-/// has no public API for "the previous app" either: the workspace notification
-/// is observed instead, which is why the switcher starts when the app does rather
-/// than on the first press.
+/// takes the desktop with them, so the app-to-app half needs no Accessibility
+/// grant. What it does need is a memory of where the rider was before MyWhoosh,
+/// because macOS has no public API for "the previous app" either: the workspace
+/// notification is observed from launch, and the app that was in front before
+/// GearUp is seeded as early as the app can look.
+///
+/// MyWhoosh usually runs fullscreen on a desktop of its own, and nothing
+/// guarantees that another app was visited while GearUp was running — launching
+/// GearUp straight into a ride is the normal case. When nothing is remembered the
+/// press changes desktop instead, which is what leaving a fullscreen ride takes.
 public final class RideAppSwitcher {
     public static let shared = RideAppSwitcher()
 
@@ -219,16 +347,21 @@ public final class RideAppSwitcher {
     /// GearUp.
     private let ownBundleID = Bundle.main.bundleIdentifier ?? "com.oscar.gearup"
 
+    /// How long activation is given to show up in `isActive` before the log says
+    /// it did not work.
+    static let activationSettleTime: TimeInterval = 0.4
+
     private var lastOther: NSRunningApplication?
     private var observer: NSObjectProtocol?
     private var started = false
 
     private init() {}
 
-    /// Starts remembering, and seeds the memory with whatever is in front now.
+    /// Starts watching which app is in front.
     ///
-    /// Seeding matters because the common case is launching GearUp from MyWhoosh:
-    /// without it the first press would have nothing to go back to.
+    /// The seed cannot come from here: by the time the controller exists, GearUp
+    /// itself is frontmost, so the app that was in front before it is handed over
+    /// by `seed(_:)`.
     public func start() {
         guard !started else { return }
         started = true
@@ -243,10 +376,14 @@ public final class RideAppSwitcher {
             }
             self?.remember(app)
         }
+    }
 
-        if let front = NSWorkspace.shared.frontmostApplication {
-            remember(front)
-        }
+    /// Remembers the app that was in front before GearUp took the screen.
+    ///
+    /// Read at launch, because that is the last moment macOS will still say: a
+    /// moment later GearUp is the frontmost app and the answer is GearUp.
+    public func seed(_ app: NSRunningApplication) {
+        remember(app)
     }
 
     deinit {
@@ -261,25 +398,65 @@ public final class RideAppSwitcher {
         lastOther = app
     }
 
-    public func toggle() -> String? {
-        let front = NSWorkspace.shared.frontmostApplication
-        let frontIsRideApp = front?.bundleIdentifier.map(rideAppBundleIDs.contains) ?? false
+    private func runningRideApp() -> NSRunningApplication? {
+        NSWorkspace.shared.runningApplications.first { app in
+            guard let bundleID = app.bundleIdentifier else { return false }
+            return rideAppBundleIDs.contains(bundleID) && !app.isTerminated
+        }
+    }
 
-        if frontIsRideApp {
-            guard let other = lastOther, !other.isTerminated else {
-                return "no app to go back to yet; visit one and this will remember it."
+    /// What the away half of the ⇄ button would do right now: the app it would
+    /// go to, or nil when it would change desktop instead. For the log, so a
+    /// launch that happened too late to see the rider's app says so out loud.
+    public var awayDestinationName: String? {
+        guard let other = lastOther, !other.isTerminated else { return nil }
+        return other.localizedName
+    }
+
+    /// One press: out of the ride, or back into it.
+    ///
+    /// Out means the app the rider came from when that is known — macOS brings
+    /// its desktop with it — and the next desktop otherwise.
+    public func toggle(note: @escaping (String) -> Void) {
+        let inRide = NSWorkspace.shared.frontmostApplication?
+            .bundleIdentifier.map(rideAppBundleIDs.contains) ?? false
+
+        if inRide {
+            if let other = lastOther, !other.isTerminated {
+                bringForward(other, note: note)
+            } else {
+                MacControl.toggleDesktop(note: note)
             }
-            other.activate()
-            return "back to \(other.localizedName ?? "the other app")."
+            return
         }
 
-        guard let ride = NSWorkspace.shared.runningApplications.first(where: {
-            guard let bundleID = $0.bundleIdentifier else { return false }
-            return rideAppBundleIDs.contains(bundleID) && !$0.isTerminated
-        }) else {
-            return "MyWhoosh is not running."
+        guard let ride = runningRideApp() else {
+            note("MyWhoosh is not running.")
+            return
         }
-        ride.activate()
-        return "back to \(ride.localizedName ?? "MyWhoosh")."
+        bringForward(ride, note: note)
+    }
+
+    /// Brings an app forward and says what really happened.
+    ///
+    /// Activation is a request, and this app is usually in the background when it
+    /// makes it. Saying "back to MyWhoosh" before looking would put a lie in the
+    /// log, so the answer is written a moment later, from `isActive`.
+    private func bringForward(_ app: NSRunningApplication, note: @escaping (String) -> Void) {
+        let name = app.localizedName ?? "MyWhoosh"
+        let isRide = app.bundleIdentifier.map(rideAppBundleIDs.contains) ?? false
+        let asked = app.activate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.activationSettleTime) {
+            if app.isActive {
+                // Reaching the ride by activating it also puts the desktop toggle
+                // back on the ride's desktop, so the next press leaves again.
+                if isRide { MacControl.noteReturnedToRide() }
+                note("\(name) is in front.")
+            } else if asked {
+                note("asked \(name) to come forward, but it did not.")
+            } else {
+                note("macOS refused to bring \(name) forward.")
+            }
+        }
     }
 }

@@ -137,9 +137,9 @@ given a real job:
 | Volume Up / Volume Down | The Mac's output volume, one sixteenth a press | none |
 | Mute | Toggles the output mute | none |
 | Next / Previous Desktop | Posts Ctrl+→ / Ctrl+← to Mission Control | Accessibility, once |
-| MyWhoosh ⇄ Last App | Activates MyWhoosh, or the app you were in before it | none |
+| MyWhoosh ⇄ Away | Back to MyWhoosh, or away from it: the app you were in, or the next desktop when there is none | Accessibility for the desktop half |
 
-The desktop pair is the only part that needs a permission: macOS has no public
+Desktops are the only part that needs a permission: macOS has no public
 "go to the next Space" API — Mission Control is driven by a key combination — so
 GearUp posts one, and posting keys is what Accessibility permission gates. Grant
 it from the settings screen (or System Settings → Privacy & Security →
@@ -147,11 +147,18 @@ Accessibility) and it sticks, because the bundle is signed with GearUp's own
 identity. Two things worth knowing:
 
 * Spaces do not wrap. Ctrl+→ on the last desktop does nothing, so a single button
-  cannot cycle back around; a second button on Previous Desktop can.
-* **MyWhoosh ⇄ Last App** needs no permission at all and does what a rider
-  usually wants: press it to leave the ride, press it again to come back. It
-  switches apps rather than desktops, and macOS brings the window's desktop with
-  it.
+  cannot cycle back around; a second button on Previous Desktop can. GearUp looks
+  at whether the desktop really moved before saying anything in the log, and
+  **MyWhoosh ⇄ Away** falls back to the other direction when the first one moves
+  nothing.
+* **MyWhoosh ⇄ Away** is the leave-and-come-back button. Leaving activates the app
+  you were in before MyWhoosh — remembered from launch, and macOS brings that
+  window's desktop with it — and when there is nothing to go back to (GearUp
+  started straight into a ride, or that app has quit since) it changes desktop
+  instead, because MyWhoosh goes fullscreen on a desktop of its own. Coming back
+  activates MyWhoosh. The app half needs no permission; the desktop half needs the
+  same grant as the buttons above. Its log line reports what actually happened —
+  the app in front, or the desktop that moved — rather than what it asked for.
 
 Outside a ride GearUp is frugal on purpose: with no MyWhoosh connected and no
 capture waiting, the puck is let go and falls asleep after a few minutes (see

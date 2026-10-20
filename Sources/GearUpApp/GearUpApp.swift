@@ -7,6 +7,21 @@ struct GearUpApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var controller = GearUpController()
 
+    /// The app that was in front before GearUp took the screen.
+    ///
+    /// Read during `init`, which is the last moment the answer is not GearUp: by
+    /// the time a view exists the app is frontmost and the rider's "previous app"
+    /// is gone. This is the seed the ⇄ button falls back to, and it is what makes
+    /// the first press work on a machine where no other app has been visited
+    /// since launch.
+    private static let appBeforeGearUp = NSWorkspace.shared.frontmostApplication
+
+    init() {
+        if let before = Self.appBeforeGearUp {
+            RideAppSwitcher.shared.seed(before)
+        }
+    }
+
     var body: some Scene {
         Window("GearUp", id: "main") {
             RootView()

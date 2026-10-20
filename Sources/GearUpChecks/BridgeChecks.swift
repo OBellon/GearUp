@@ -83,10 +83,19 @@ func runShiftRouterChecks(_ checks: Checks) {
         )
         checks.equal(ButtonAction.volumeUp.title, "Volume Up", "the volume-up title")
         checks.equal(ButtonAction.nextSpace.title, "Next Desktop", "the next-desktop title")
-        checks.equal(ButtonAction.toggleRideApp.title, "MyWhoosh ⇄ Last App", "the ride-app title")
+        checks.equal(ButtonAction.toggleRideApp.title, "MyWhoosh ⇄ Away", "the ride-app title")
         checks.expect(
             ButtonAction.allCases.allSatisfy { !$0.title.isEmpty },
             "every action has a title for the settings screen"
+        )
+        checks.equal(
+            ButtonAction.allCases.filter(\.needsAccessibility),
+            [.nextSpace, .previousSpace, .toggleRideApp],
+            "the desktop actions are the ones that need Accessibility"
+        )
+        checks.expect(
+            ButtonAction.toggleRideApp.detail?.contains("desktop") == true,
+            "the ride-app action says it can change desktop when there is nowhere else to go"
         )
         checks.expect(
             ButtonAction.allCases.filter { !$0.isShift }.allSatisfy { $0.detail != nil },
