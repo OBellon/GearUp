@@ -227,7 +227,7 @@ def main():
 
     # ── Mac actions ─────────────────────────────────────────────────────────
     buttons = {}
-    button = re.compile(r"Click V2: ([a-z+]+) pressed")
+    button = re.compile(r"Click V2: (\w+|[+]) pressed")
     for row in window:
         match = button.search(row["text"])
         if match:

@@ -481,11 +481,23 @@ public final class GearUpController: ObservableObject {
             lastNotificationBytes = nil
             repeatCount = 0
             let suffix = reason.map { " (\($0))" } ?? ""
-            if clickCentral.keepsPuckAwake {
+            if clickCentral.isHoldingPuck {
                 // The central is already retrying by handle, so say that instead
                 // of telling the rider to press a button for nothing.
                 click.note = "Reconnecting…"
                 log.add("Click V2 disconnected\(suffix). Reconnecting.", level: .warning)
+            } else if clickCentral.keepsPuckAwake {
+                // A client is connected but the hold has stood down for a quiet
+                // spell, so this drop is the release doing its job. Saying
+                // "reconnecting" here would be wrong twice over: the retry cannot
+                // do anything until the puck wakes, and the wake press is lost.
+                click.note = "Asleep after the quiet spell; a press brings it back."
+                log.add(
+                    "Click V2 disconnected\(suffix). The hold stood down after the quiet spell, "
+                    + "so it is powering down as designed. The press that wakes it is lost; the "
+                    + "one after that shifts.",
+                    level: .info
+                )
             } else {
                 // Not held, so the resets stop and the puck powers down on its own
                 // minute. The way back is armed all the same: the press that wakes

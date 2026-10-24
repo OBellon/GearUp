@@ -481,6 +481,21 @@ and down, the gear it ended on, shifts dropped because nothing was connected, th
 measured %/h next to the puck's own forecast, how often the link was reset, and every
 warning that was not expected.
 
+**The first full ride measured it.** In 41 minutes of holding, the level stayed at
+80% and the puck's own forecast went from 49 h to 47 h — about a percent an hour, a
+third of a percent for that ride — with 33 shifts delivered and none dropped, and 14
+trips away to Chrome and back. The four days it spent asleep between sessions did not
+move the level at all. That is the scale to judge the frugal design by: an hour of
+holding costs about a percent, so the hundred hours Zwift quotes for a CR2032 are not
+spent by riding.
+
+**What the quiet spell costs is one press, and the first ride paid it.** Past three
+minutes without a press the hold stands down (`idleReleaseThreshold`), the puck powers
+down, and the press that wakes it is swallowed: on that ride the rider came back after
+twenty-five minutes, the first press brought the link back, and the second one — an
+⇄ — did its job. Nothing was lost that mattered; the press was the price of the puck
+being asleep. A ride that keeps shifting never reaches the threshold.
+
 Nothing in the published protocol switches the sleep off: the opcodes cover
 firmware, battery, the trainer and powering *off*, and the data objects the device
 info, the date and time, input config and the like. So GearUp does what BikeControl

@@ -191,6 +191,11 @@ public final class ClickCentral: NSObject {
     ///
     /// This governs the *reset* only. Getting a dropped puck back is a separate
     /// matter and is not expensive: see `reconnectInterval`.
+    /// Whether the hold is actually running right now: on, and not standing down
+    /// for a quiet spell. The difference matters when the link drops, because a
+    /// drop after a release is the release doing its job, not a fault.
+    public var isHoldingPuck: Bool { keepsPuckAwake && !isReleased }
+
     public var keepsPuckAwake = false {
         didSet {
             guard keepsPuckAwake != oldValue else { return }
