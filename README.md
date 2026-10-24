@@ -86,6 +86,7 @@ make app             # assemble and sign .build/GearUp.app
 make run             # build the app and open it
 make icon            # redraw the app icon (ICON_VARIANT=bike|drivetrain|gear)
 make smoke           # build, open every screen, and check the bridge came up
+make report FROM=12:05 TO=13:40  # summarise a ride from the app log
 ```
 
 > XCTest and swift-testing both ship with Xcode, which GearUp does not require,
@@ -474,6 +475,11 @@ its battery every five minutes (`ClickCentral.batteryInterval`), so a ride leave
 series of percentages in the log instead of one reading at the start. That series is
 what to compare, and a `Get` does not lengthen the puck's own window, so it costs
 the four bytes it is.
+
+`make report FROM=12:05 TO=13:40` reads that series back as a ride report: shifts up
+and down, the gear it ended on, shifts dropped because nothing was connected, the
+measured %/h next to the puck's own forecast, how often the link was reset, and every
+warning that was not expected.
 
 Nothing in the published protocol switches the sleep off: the opcodes cover
 firmware, battery, the trainer and powering *off*, and the data objects the device

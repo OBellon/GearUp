@@ -8,6 +8,7 @@
 #   make run     — build the app and open it
 #   make icon    — redraw the app icon and pack Resources/GearUp.icns
 #   make smoke   — launch the app and check that it really came up
+#   make report  — summarise a ride from the log (FROM=12:05 TO=13:40)
 #   make clean   — remove build artefacts
 #
 # Extra probe flags go through ARGS, e.g.:
@@ -16,7 +17,7 @@
 
 ARGS ?=
 
-.PHONY: build test probe probe-app signing app run icon smoke clean lint
+.PHONY: build test probe probe-app signing app run icon smoke report clean lint
 
 # The icon is drawn by scripts/make-icon.swift; `make icon ICON_VARIANT=bike`
 # (or drivetrain) swaps the motif.
@@ -54,6 +55,11 @@ icon:
 
 smoke:
 	./scripts/smoke.sh $(ARGS)
+
+# Shifts, dropped shifts, battery drain and link resets for one ride. Times are
+# the wall clock the log prints; TO is optional.
+report:
+	python3 scripts/ride-report.py --from $(FROM) $(if $(TO),--to $(TO))
 
 clean:
 	swift package clean
