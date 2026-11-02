@@ -496,6 +496,17 @@ twenty-five minutes, the first press brought the link back, and the second one �
 ⇄ — did its job. Nothing was lost that mattered; the press was the price of the puck
 being asleep. A ride that keeps shifting never reaches the threshold.
 
+**The level counts in tens.** A second ride, forty-five minutes long, went 80% → 70%,
+which divides out to 13%/h — and is not. The puck has only ever reported 90, 80 and
+70, never 87 or 73: the field is a ten-point bucket, and a step is a bucket crossing,
+not a drain. The instrument beside it is the forecast, and that stayed at 46–49 h
+across both rides, so an hour of holding is worth about a percent and a half and a
+forty-five minute ride about one percent. `make report` now refuses to divide a bucket
+by the elapsed time and says so instead. That second ride also put the rest of the
+design through a harder session than the first: 21 shifts with none dropped, four
+pauses long enough to release the puck (so four wake presses), and nine trips to
+Chrome and back, none refused.
+
 Nothing in the published protocol switches the sleep off: the opcodes cover
 firmware, battery, the trainer and powering *off*, and the data objects the device
 info, the date and time, input config and the like. So GearUp does what BikeControl

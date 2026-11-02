@@ -183,11 +183,22 @@ def main():
             if current[1] != previous[1]:
                 changes.append((current[0], previous[1], current[1]))
         print(f"  level: {level_first}% → {level_last}% over {duration(battery_hours)}")
-        if level_first != level_last and battery_hours > 0:
-            print(f"  measured: {hours((level_first - level_last) / battery_hours)} %/h")
+
+        # The puck counts its level in tens: 90, 80, 70 in the logs so far, never
+        # 87 or 73. A ten-point jump after twenty minutes therefore says nothing
+        # about the drain — it is a bucket being crossed — and quoting it as %/h
+        # would invent a number fourteen times too big.
+        levels = [reading[1] for reading in readings]
+        steps = sorted({abs(b - a) for a, b in zip(levels, levels[1:]) if b != a})
+        quantised = bool(steps) and all(step % 10 == 0 for step in steps)
+        if not steps:
+            print("  measured: no step yet (the level moves in ten-point buckets; "
+                  "a short ride often does not cross one)")
+        elif quantised:
+            print(f"  level steps: {', '.join(str(step) for step in steps)} points — the puck "
+                  "counts in tens, so a step is a bucket, not a measurement; read the forecast")
         else:
-            print("  measured: no step yet (the puck reports whole percent; "
-                  "a short ride often does not move it)")
+            print(f"  measured: {hours((level_first - level_last) / battery_hours)} %/h")
 
         forecasts = [(row, level, minutes) for row, level, minutes in readings if minutes]
         if forecasts:
